@@ -1,8 +1,10 @@
 """``hrbias report``: turn Inspect logs into a Markdown and a JSON report.
 
-Each log (one model run) gets its own section. A log is marked not comparable
-when its benchmark version, codebook version or default judge pin differs from
-this code's, or when any answer was coded by a judge other than the default.
+Each log (one model run) gets its own section, and within it each tier
+(``real_event`` and ``mirrored``) is reported separately. A log is marked not
+comparable when its benchmark version, codebook version or default judge pin
+differs from this code's, or when any conversation was coded by a judge other
+than the default.
 """
 
 import argparse
@@ -17,33 +19,43 @@ from typing import Any
 from inspect_ai.log import EvalLog, list_eval_logs, read_eval_log
 from inspect_ai.model import GenerateConfig, Model, get_model
 
-from hrbias.codebook import CODEBOOK, CODES
-from hrbias.dataset import DEFAULT_DATA_DIR, BenchmarkData, load_benchmark_data
+from hrbias.dataset import (
+    DEFAULT_DATA_DIR,
+    FAMILIES,
+    PERPETRATOR_ROLE,
+    TIERS,
+    VICTIM_ROLE,
+    BenchmarkData,
+    load_benchmark_data,
+)
 from hrbias.judge import (
     DEFAULT_JUDGE_MODEL,
     DEFAULT_JUDGE_MODEL_ARGS,
     CodeAgreement,
     RejudgeItem,
+    Turn,
     judge_consistency,
 )
 from hrbias.metrics import (
     BREAKDOWN_DIMENSIONS,
     CONFIDENCE_LEVEL,
-    HEADLINE_CODE,
-    HEADLINE_VALUE,
+    ActorGap,
+    CaseGap,
     CodedAnswer,
     Estimate,
     FailureRate,
     LeakRate,
-    MeanGroupGap,
+    SetDisparity,
     SetInfo,
+    actor_gaps,
     breakdown,
+    case_gaps,
+    case_rates,
     failure_rates,
-    group_gaps,
-    group_rates,
+    headline_disparities,
+    key_values,
     leak_rates,
     mean_disparity,
-    mean_group_gaps,
     permuted_disparities,
     set_disparities,
 )
@@ -67,6 +79,41 @@ class ReportError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CodeEstimate:
+    """The mean disparity of one family's ``code == value``."""
+
+    family: str
+    code: str
+    value: str
+    estimate: Estimate
+
+
+@dataclass(frozen=True)
+class BreakdownEstimate:
+    """A family's headline disparity within one level of a dimension."""
+
+    family: str
+    code: str
+    value: str
+    dimension: str
+    level: str
+    estimate: Estimate
+
+
+@dataclass(frozen=True)
+class TierReport:
+    """Everything the report says about one tier of one log."""
+
+    tier: str
+    answers: int
+    headlines: list[CodeEstimate]
+    breakdowns: list[BreakdownEstimate]
+    code_disparities: list[CodeEstimate]
+    victim_gaps: list[ActorGap]
+    perpetrator_gaps: list[ActorGap]
+
+
+@dataclass(frozen=True)
 class LogReport:
     """Everything the report says about one log."""
 
@@ -78,10 +125,7 @@ class LogReport:
     answers: int
     comparable: bool
     not_comparable_reasons: list[str]
-    headline: Estimate | None
-    breakdowns: dict[str, dict[str, Estimate]]
-    code_disparities: dict[str, Estimate]
-    group_gaps: list[MeanGroupGap]
+    tiers: list[TierReport]
     failures: list[FailureRate]
     leaks: list[LeakRate]
     consistency: CodeAgreement | None = None
@@ -152,20 +196,18 @@ def build_log_report(
 ) -> LogReport:
     """Compute every metric for one log."""
     answers = coded_answers(log)
-    rates = group_rates(answers)
-    gaps = group_gaps(rates)
+    rates = case_rates(answers)
+    gaps = case_gaps(rates)
     disparities = set_disparities(rates, permuted_disparities(answers))
     reasons = not_comparable_reasons(log)
-    code_disparities = {}
-    for code in CODES:
-        for value in CODEBOOK[code].values:
-            estimate = mean_disparity(disparities, code, value)
-            if estimate is not None:
-                code_disparities[f"{code}={value}"] = estimate
-
+    tiers = [
+        tier_report(tier, [a for a in answers if a.set_info.tier == tier], disparities, gaps)
+        for tier in TIERS
+        if any(a.set_info.tier == tier for a in answers)
+    ]
     consistency = None
     if grader is not None and consistency_sample > 0:
-        consistency = _consistency(log, data, consistency_sample, grader)
+        consistency = _consistency(answers, data, consistency_sample, grader)
 
     return LogReport(
         log_file=Path(log.location).name,
@@ -176,19 +218,56 @@ def build_log_report(
         answers=len(answers),
         comparable=not reasons,
         not_comparable_reasons=reasons,
-        headline=mean_disparity(disparities),
-        breakdowns={dim: breakdown(disparities, dim) for dim in BREAKDOWN_DIMENSIONS},
-        code_disparities=code_disparities,
-        group_gaps=mean_group_gaps(gaps),
+        tiers=tiers,
         failures=failure_rates(answers),
         leaks=leak_rates(answers),
         consistency=consistency,
         details={
-            "group_rates": [asdict(r) for r in rates],
+            "case_rates": [asdict(r) for r in rates],
             "set_disparities": [
                 {k: v for k, v in asdict(d).items() if k != PERMUTED_FIELD} for d in disparities
             ],
         },
+    )
+
+
+def tier_report(
+    tier: str,
+    answers: Sequence[CodedAnswer],
+    disparities: Sequence[SetDisparity],
+    gaps: Sequence[CaseGap],
+) -> TierReport:
+    """Headlines, breakdowns, every code's disparity and actor gaps for one tier."""
+    in_tier = [d for d in disparities if d.set_info.tier == tier]
+    tier_gaps = [g for g in gaps if g.set_info.tier == tier]
+    headlines: list[CodeEstimate] = []
+    breakdowns: list[BreakdownEstimate] = []
+    code_estimates: list[CodeEstimate] = []
+    victim: list[ActorGap] = []
+    perpetrator: list[ActorGap] = []
+    for family in FAMILIES:
+        selected = [d for d in in_tier if d.set_info.family == family]
+        for code, value, estimate in headline_disparities(selected, family):
+            headlines.append(CodeEstimate(family, code, value, estimate))
+            breakdowns.extend(
+                BreakdownEstimate(family, code, value, dimension, level, level_estimate)
+                for dimension in BREAKDOWN_DIMENSIONS
+                for level, level_estimate in breakdown(selected, dimension, code, value).items()
+            )
+            family_gaps = [g for g in tier_gaps if g.set_info.family == family]
+            victim.extend(actor_gaps(family_gaps, VICTIM_ROLE, code, value))
+            perpetrator.extend(actor_gaps(family_gaps, PERPETRATOR_ROLE, code, value))
+
+        code_estimates.extend(_code_estimates(family, selected))
+
+    return TierReport(
+        tier=tier,
+        answers=len(answers),
+        headlines=headlines,
+        breakdowns=breakdowns,
+        code_disparities=code_estimates,
+        victim_gaps=victim,
+        perpetrator_gaps=perpetrator,
     )
 
 
@@ -203,6 +282,7 @@ def coded_answers(log: EvalLog) -> list[CodedAnswer]:
         meta = sample.metadata
         score_meta = score.metadata or {}
         leak_options = score_meta.get("leak_options")
+        transcript = score_meta.get("redacted_transcript")
         answers.append(
             CodedAnswer(
                 sample_id=str(sample.id),
@@ -210,18 +290,21 @@ def coded_answers(log: EvalLog) -> list[CodedAnswer]:
                 set_info=SetInfo(
                     set_id=meta["set_id"],
                     template_id=meta["template_id"],
-                    right_id=meta["right_id"],
-                    category=meta["category"],
+                    family=meta["family"],
+                    tier=meta["tier"],
+                    case_set=meta["case_set"],
                     language=meta["language"],
                     framing=meta["framing"],
                 ),
-                group_id=meta["group_id"],
+                case_id=meta["case_id"],
+                victim_id=meta["victim_id"],
+                perpetrator_id=meta["perpetrator_id"],
                 judge_status=str(score.value.get(JUDGE_STATUS)),
-                codes={code: score.value.get(code) for code in CODES},
+                codes={k: v for k, v in score.value.items() if k != JUDGE_STATUS},
                 leak_correct=score_meta.get("leak_correct"),
                 leak_options=len(leak_options) if leak_options else None,
-                redacted_question=score_meta.get("redacted_question"),
-                redacted_answer=score_meta.get("redacted_answer"),
+                right_ids=tuple(meta["right_ids"]),
+                transcript=tuple(Turn(**t) for t in transcript) if transcript else None,
             )
         )
 
@@ -256,11 +339,23 @@ def render_markdown(reports: Sequence[LogReport]) -> str:
     lines = ["# LLM human rights bias benchmark report", ""]
     for r in reports:
         lines += _summary_lines(r)
-        lines += _headline_lines(r)
-        lines += _metric_tables(r)
-        lines += _optional_tables(r)
+        for tier in r.tiers:
+            lines += _tier_lines(tier)
+
+        lines += _judge_tables(r)
 
     return "\n".join(lines)
+
+
+def _code_estimates(family: str, disparities: Sequence[SetDisparity]) -> list[CodeEstimate]:
+    estimates = []
+    for code in dict.fromkeys(d.code for d in disparities):
+        for value in key_values(code):
+            estimate = mean_disparity(disparities, code, value)
+            if estimate is not None:
+                estimates.append(CodeEstimate(family, code, value, estimate))
+
+    return estimates
 
 
 def _summary_lines(r: LogReport) -> list[str]:
@@ -273,65 +368,72 @@ def _summary_lines(r: LogReport) -> list[str]:
     return [*lines, "- Comparable: no", *reasons, ""]
 
 
-def _headline_lines(r: LogReport) -> list[str]:
-    lines = ["### Headline", ""]
-    if r.headline is None:
-        return [*lines, "No set had enough coded answers to compare groups.", ""]
+def _tier_lines(t: TierReport) -> list[str]:
+    lines = [f"### Tier: {t.tier} ({t.answers} answers)", "", "#### Headline by family", ""]
+    if not t.headlines:
+        lines += ["No set had enough coded answers to compare cases.", ""]
+    else:
+        lines += _table(
+            ["Family", "Code = value", *_ESTIMATE_COLUMNS],
+            [[h.family, _code(h.code, h.value), *_estimate_cells(h.estimate)] for h in t.headlines],
+        )
 
-    h = r.headline
-    return [
-        *lines,
-        f'Mean set disparity in "{HEADLINE_CODE} = {HEADLINE_VALUE}": {_rate(h.mean)} '
-        f"({_LEVEL} CI {_interval(h)}), over {h.sets} sets from {h.templates} templates. "
-        f"Expected by chance: {_optional_rate(h.chance_mean)} (p = {_optional_rate(h.p_value)}).",
-        "",
-    ]
-
-
-def _metric_tables(r: LogReport) -> list[str]:
-    lines = [f"### Breakdown ({HEADLINE_CODE} = {HEADLINE_VALUE})", ""]
+    lines += ["#### Headline breakdown", ""]
     lines += _table(
-        ["Dimension", "Level", *_ESTIMATE_COLUMNS],
+        ["Family", "Code = value", "Dimension", "Level", *_ESTIMATE_COLUMNS],
         [
-            [dim, lvl, *_estimate_cells(e)]
-            for dim, levels in r.breakdowns.items()
-            for lvl, e in levels.items()
+            [b.family, _code(b.code, b.value), b.dimension, b.level, *_estimate_cells(b.estimate)]
+            for b in t.breakdowns
         ],
     )
-    lines += ["### Disparity by code", ""]
+    lines += ["#### Disparity by code", ""]
     lines += _table(
-        ["Code = value", *_ESTIMATE_COLUMNS],
-        [[name, *_estimate_cells(e)] for name, e in r.code_disparities.items()],
-    )
-    lines += [f"### Group gaps ({HEADLINE_CODE} = {HEADLINE_VALUE})", ""]
-    lines += _table(
-        ["Language", "Category", "Group", "Mean gap", "Sets"],
+        ["Family", "Code = value", *_ESTIMATE_COLUMNS],
         [
-            [g.language, g.category, g.group_id, GAP_FORMAT.format(g.mean_gap), str(g.sets)]
-            for g in r.group_gaps
+            [c.family, _code(c.code, c.value), *_estimate_cells(c.estimate)]
+            for c in t.code_disparities
         ],
     )
-    lines += ["### Judge failures", ""]
-    lines += _table(
-        ["Language", "Category", "Group", "Failed", "Total", "Rate"],
-        [
-            [f.language, f.category, f.group_id, str(f.failed), str(f.total), _rate(f.rate)]
-            for f in r.failures
-        ],
-    )
+    lines += ["#### Victim gaps (headline codes)", ""]
+    lines += _gap_table("Victim", t.victim_gaps, t.headlines)
+    lines += ["#### Perpetrator gaps (headline codes)", ""]
+    lines += _gap_table("Perpetrator", t.perpetrator_gaps, t.headlines)
     return lines
 
 
-def _optional_tables(r: LogReport) -> list[str]:
-    lines: list[str] = []
+def _gap_table(
+    label: str, gaps: Sequence[ActorGap], headlines: Sequence[CodeEstimate]
+) -> list[str]:
+    rows = []
+    for headline in headlines:
+        code = _code(headline.code, headline.value)
+        rows.extend(
+            [g.language, g.family, code, g.actor_id, GAP_FORMAT.format(g.mean_gap), str(g.sets)]
+            for g in gaps
+            if (g.family, g.code, g.value) == (headline.family, headline.code, headline.value)
+        )
+
+    return _table(["Language", "Family", "Code = value", label, "Mean gap", "Sets"], rows)
+
+
+def _judge_tables(r: LogReport) -> list[str]:
+    lines = ["### Judge failures", ""]
+    lines += _table(
+        ["Tier", "Language", "Case set", "Case", "Failed", "Total", "Rate"],
+        [
+            [f.tier, f.language, f.case_set, f.case_id, str(f.failed), str(f.total), _rate(f.rate)]
+            for f in r.failures
+        ],
+    )
     if r.leaks:
         lines += ["### Leak check", ""]
         lines += _table(
-            ["Language", "Category", "Correct", "Checked", "Rate", "Chance"],
+            ["Tier", "Language", "Case set", "Correct", "Checked", "Rate", "Chance"],
             [
                 [
+                    k.tier,
                     k.language,
-                    k.category,
+                    k.case_set,
                     str(k.correct),
                     str(k.checked),
                     _rate(k.rate),
@@ -363,7 +465,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--consistency-sample",
         type=int,
         default=0,
-        help="code this many answers per log again and report agreement per code",
+        help="code this many conversations per log again and report agreement per code",
     )
     report.add_argument(
         "--consistency-grader",
@@ -380,17 +482,21 @@ def _consistency_model(name: str | None) -> Model:
     return get_model(name, config=config)
 
 
-def _consistency(log: EvalLog, data: BenchmarkData, size: int, grader: Model) -> CodeAgreement:
+def _consistency(
+    answers: Sequence[CodedAnswer], data: BenchmarkData, size: int, grader: Model
+) -> CodeAgreement:
     candidates = [
         RejudgeItem(
-            redacted_question=a.redacted_question,
-            redacted_answer=a.redacted_answer,
-            right_description=data.rights[a.set_info.right_id].description[a.set_info.language],
+            transcript=a.transcript,
+            right_descriptions=tuple(
+                data.rights[r].description[a.set_info.language] for r in a.right_ids
+            ),
+            family=a.set_info.family,
             language=a.set_info.language,
             codes=a.codes,
         )
-        for a in coded_answers(log)
-        if a.ok and a.redacted_question is not None and a.redacted_answer is not None
+        for a in answers
+        if a.ok and a.transcript is not None
     ]
     chosen = random.Random(CONSISTENCY_SEED).sample(candidates, min(size, len(candidates)))
     return asyncio.run(judge_consistency(grader, chosen))
@@ -403,6 +509,10 @@ def _table(header: list[str], rows: list[list[str]]) -> list[str]:
     lines = [f"| {' | '.join(header)} |", f"|{'|'.join('---' for _ in header)}|"]
     lines += [f"| {' | '.join(row)} |" for row in rows]
     return [*lines, ""]
+
+
+def _code(code: str, value: str) -> str:
+    return f"{code} = {value}"
 
 
 def _estimate_cells(estimate: Estimate) -> list[str]:

@@ -1,6 +1,6 @@
 [project]
 name = "hrbias"
-version = "0.1.0"
+version = "0.2.0"
 description = "LLM human rights bias benchmark: measures whether a model answers the same human rights question differently depending on the group asked about."
 readme = "README.md"
 requires-python = ">=3.12"
