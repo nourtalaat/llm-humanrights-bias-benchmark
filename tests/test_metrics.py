@@ -10,24 +10,24 @@ from hrbias.metrics import (
     SetInfo,
     bootstrap_interval,
     breakdown,
+    case_gaps,
+    case_rates,
     failure_rates,
-    group_gaps,
-    group_rates,
     leak_rates,
+    mean_case_gaps,
     mean_disparity,
-    mean_group_gaps,
     permuted_disparities,
     set_disparities,
 )
 from hrbias.scorer import STATUS_FAILED, STATUS_OK
 
-SET_A = SetInfo("t1.neutral.p0.en", "t1", "right-a", "cat", "en", "neutral")
-SET_B = SetInfo("t2.neutral.p0.ar", "t2", "right-b", "cat", "ar", "neutral")
+SET_A = SetInfo("t1.neutral.p0.en", "t1", "detention", "mirrored", "set-a", "en", "neutral")
+SET_B = SetInfo("t2.neutral.p0.ar", "t2", "detention", "mirrored", "set-a", "ar", "neutral")
 
 
 def _answer(
     set_info: SetInfo,
-    group_id: str,
+    case_id: str,
     stance: str | None,
     epoch: int = 1,
     leak_correct: bool | None = None,
@@ -35,10 +35,10 @@ def _answer(
     status = STATUS_OK if stance else STATUS_FAILED
     codes = {**VALID_CODES, "stance": stance} if stance else dict.fromkeys(CODES)
     return CodedAnswer(
-        sample_id=f"{set_info.set_id}.{group_id}",
+        sample_id=f"{set_info.set_id}.{case_id}",
         epoch=epoch,
         set_info=set_info,
-        group_id=group_id,
+        case_id=case_id,
         judge_status=status,
         codes=codes,
         leak_correct=leak_correct,
@@ -60,7 +60,7 @@ ANSWERS = [
 
 
 @pytest.mark.parametrize(
-    ("set_info", "group_id", "value", "expected_rate", "expected_answers"),
+    ("set_info", "case_id", "value", "expected_rate", "expected_answers"),
     [
         pytest.param(SET_A, "g1", "affirms", 1.0, 2, id="all-affirm"),
         pytest.param(SET_A, "g2", "affirms", 0.5, 2, id="half-affirm"),
@@ -71,15 +71,15 @@ ANSWERS = [
 )
 def test_group_rates(
     set_info: SetInfo,
-    group_id: str,
+    case_id: str,
     value: str,
     expected_rate: float,
     expected_answers: int,
 ) -> None:
     [rate] = [
         r
-        for r in group_rates(ANSWERS)
-        if r.set_info == set_info and r.group_id == group_id and r.code == "stance"
+        for r in case_rates(ANSWERS)
+        if r.set_info == set_info and r.case_id == case_id and r.code == "stance"
         if r.value == value
     ]
 
@@ -88,18 +88,18 @@ def test_group_rates(
 
 
 @pytest.mark.parametrize(
-    ("group_id", "expected_gap"),
+    ("case_id", "expected_gap"),
     [
         pytest.param("g1", 0.5, id="above-mean"),
         pytest.param("g2", 0.0, id="at-mean"),
         pytest.param("g3", -0.5, id="below-mean"),
     ],
 )
-def test_group_gaps(group_id: str, expected_gap: float) -> None:
+def test_group_gaps(case_id: str, expected_gap: float) -> None:
     [gap] = [
         g
-        for g in group_gaps(group_rates(ANSWERS))
-        if g.set_info == SET_A and g.group_id == group_id
+        for g in case_gaps(case_rates(ANSWERS))
+        if g.set_info == SET_A and g.case_id == case_id
         if g.code == "stance" and g.value == "affirms"
     ]
 
@@ -118,23 +118,23 @@ def test_group_gaps(group_id: str, expected_gap: float) -> None:
 def test_set_disparities(set_info: SetInfo, value: str, expected: float) -> None:
     [disparity] = [
         d
-        for d in set_disparities(group_rates(ANSWERS))
+        for d in set_disparities(case_rates(ANSWERS))
         if d.set_info == set_info and d.code == "stance" and d.value == value
     ]
 
     assert disparity.disparity == expected
-    assert disparity.groups == 3
+    assert disparity.cases == 3
 
 
 def test_set_with_one_coded_group_is_left_out() -> None:
     answers = [_answer(SET_A, "g1", "affirms"), _answer(SET_A, "g2", None)]
 
-    assert set_disparities(group_rates(answers)) == []
+    assert set_disparities(case_rates(answers)) == []
     assert mean_disparity([]) is None
 
 
 def test_headline_mean_and_interval_contains_it() -> None:
-    estimate = mean_disparity(set_disparities(group_rates(ANSWERS)))
+    estimate = mean_disparity(set_disparities(case_rates(ANSWERS)))
 
     assert estimate is not None
     assert estimate.mean == pytest.approx(0.5)
@@ -145,7 +145,7 @@ def test_headline_mean_and_interval_contains_it() -> None:
 
 
 def test_breakdown_by_language() -> None:
-    by_language = breakdown(set_disparities(group_rates(ANSWERS)), "language")
+    by_language = breakdown(set_disparities(case_rates(ANSWERS)), "language")
 
     assert set(by_language) == {"ar", "en"}
     assert by_language["en"].mean == 1.0
@@ -166,8 +166,7 @@ def test_bootstrap_interval(units: list[list[float]], expected: tuple[float, flo
 
 def test_mean_group_gaps() -> None:
     by_key = {
-        (g.language, g.group_id): g.mean_gap
-        for g in mean_group_gaps(group_gaps(group_rates(ANSWERS)))
+        (g.language, g.case_id): g.mean_gap for g in mean_case_gaps(case_gaps(case_rates(ANSWERS)))
     }
 
     assert by_key[("en", "g1")] == pytest.approx(0.5)
@@ -176,7 +175,7 @@ def test_mean_group_gaps() -> None:
 
 
 def test_failure_rates() -> None:
-    rates = {(f.language, f.group_id): f for f in failure_rates(ANSWERS)}
+    rates = {(f.language, f.case_id): f for f in failure_rates(ANSWERS)}
 
     assert rates[("en", "g3")].failed == 1
     assert rates[("en", "g3")].rate == 0.5
@@ -201,19 +200,27 @@ def _random_answers(seed: int, planted_group: str | None) -> list[CodedAnswer]:
     rng = random.Random(seed)
     answers = []
     for index in range(NULL_SETS):
-        set_info = SetInfo(f"t{index}.neutral.p0.en", f"t{index}", "right", "cat", "en", "neutral")
-        for group_id in GROUPS:
+        set_info = SetInfo(
+            f"t{index}.neutral.p0.en",
+            f"t{index}",
+            "detention",
+            "mirrored",
+            "set-a",
+            "en",
+            "neutral",
+        )
+        for case_id in GROUPS:
             for epoch in range(ANSWERS_PER_GROUP):
-                affirms = group_id == planted_group or rng.random() < 0.5
+                affirms = case_id == planted_group or rng.random() < 0.5
                 stance = "affirms" if affirms else "denies"
-                answers.append(_answer(set_info, group_id, stance, epoch))
+                answers.append(_answer(set_info, case_id, stance, epoch))
 
     return answers
 
 
 def _headline_with_chance(answers: list[CodedAnswer]) -> Estimate:
     permuted = permuted_disparities(answers, permutations=TEST_PERMUTATIONS)
-    estimate = mean_disparity(set_disparities(group_rates(answers), permuted))
+    estimate = mean_disparity(set_disparities(case_rates(answers), permuted))
     assert estimate is not None
     assert estimate.chance_mean is not None
     assert estimate.p_value is not None
@@ -248,7 +255,7 @@ def test_permutations_are_reproducible_and_keep_group_sizes() -> None:
 
 
 def test_without_permutations_chance_is_missing() -> None:
-    estimate = mean_disparity(set_disparities(group_rates(ANSWERS)))
+    estimate = mean_disparity(set_disparities(case_rates(ANSWERS)))
 
     assert estimate is not None
     assert estimate.chance_mean is None

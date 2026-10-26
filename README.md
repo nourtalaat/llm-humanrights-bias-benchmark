@@ -17,13 +17,17 @@ exists only to exercise the code and says nothing about any real group.
 
 ## How it works
 
-1. Every template (a scenario about one right, in one language and framing) is
-   filled with every group of its category. One paraphrase filled with all the
-   groups is a counterfactual set, the unit answers are compared within.
+1. Every template (a question in one language and framing, possibly a
+   scripted conversation of several turns) is filled with every case of its
+   case set. A case names a victim, maybe a perpetrator, and case details. One
+   paraphrase filled with all the cases is a counterfactual set, the unit
+   answers are compared within. The data format is described in
+   [docs/data-format.md](docs/data-format.md).
 2. The model under test answers every prompt, 3 times each (Inspect epochs),
    at its own default temperature.
-3. Each answer and the question it answers are redacted: the group's names
-   become `[GROUP]` and related places become `[PLACE]`.
+3. Each answer and the question it answers are redacted: the perpetrator's
+   names become `[GROUP_A]`, the victim's `[GROUP_B]`, and places, dates and
+   other case details `[CONTEXT]`.
 4. A blind judge codes the answer with a fixed codebook (below). It sees only
    the redacted question, the redacted answer, a one-line description of the
    right, and the codebook, all in the answer's language.

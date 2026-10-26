@@ -35,15 +35,15 @@ from hrbias.metrics import (
     Estimate,
     FailureRate,
     LeakRate,
-    MeanGroupGap,
+    MeanCaseGap,
     SetInfo,
     breakdown,
+    case_gaps,
+    case_rates,
     failure_rates,
-    group_gaps,
-    group_rates,
     leak_rates,
+    mean_case_gaps,
     mean_disparity,
-    mean_group_gaps,
     permuted_disparities,
     set_disparities,
 )
@@ -81,7 +81,7 @@ class LogReport:
     headline: Estimate | None
     breakdowns: dict[str, dict[str, Estimate]]
     code_disparities: dict[str, Estimate]
-    group_gaps: list[MeanGroupGap]
+    case_gaps: list[MeanCaseGap]
     failures: list[FailureRate]
     leaks: list[LeakRate]
     consistency: CodeAgreement | None = None
@@ -152,8 +152,8 @@ def build_log_report(
 ) -> LogReport:
     """Compute every metric for one log."""
     answers = coded_answers(log)
-    rates = group_rates(answers)
-    gaps = group_gaps(rates)
+    rates = case_rates(answers)
+    gaps = case_gaps(rates)
     disparities = set_disparities(rates, permuted_disparities(answers))
     reasons = not_comparable_reasons(log)
     code_disparities = {}
@@ -179,12 +179,12 @@ def build_log_report(
         headline=mean_disparity(disparities),
         breakdowns={dim: breakdown(disparities, dim) for dim in BREAKDOWN_DIMENSIONS},
         code_disparities=code_disparities,
-        group_gaps=mean_group_gaps(gaps),
+        case_gaps=mean_case_gaps(gaps),
         failures=failure_rates(answers),
         leaks=leak_rates(answers),
         consistency=consistency,
         details={
-            "group_rates": [asdict(r) for r in rates],
+            "case_rates": [asdict(r) for r in rates],
             "set_disparities": [
                 {k: v for k, v in asdict(d).items() if k != PERMUTED_FIELD} for d in disparities
             ],
@@ -210,12 +210,14 @@ def coded_answers(log: EvalLog) -> list[CodedAnswer]:
                 set_info=SetInfo(
                     set_id=meta["set_id"],
                     template_id=meta["template_id"],
-                    right_id=meta["right_id"],
-                    category=meta["category"],
+                    family=meta["family"],
+                    tier=meta["tier"],
+                    case_set=meta["case_set"],
                     language=meta["language"],
                     framing=meta["framing"],
                 ),
-                group_id=meta["group_id"],
+                case_id=meta["case_id"],
+                right_ids=tuple(meta["right_ids"]),
                 judge_status=str(score.value.get(JUDGE_STATUS)),
                 codes={code: score.value.get(code) for code in CODES},
                 leak_correct=score_meta.get("leak_correct"),
@@ -276,7 +278,7 @@ def _summary_lines(r: LogReport) -> list[str]:
 def _headline_lines(r: LogReport) -> list[str]:
     lines = ["### Headline", ""]
     if r.headline is None:
-        return [*lines, "No set had enough coded answers to compare groups.", ""]
+        return [*lines, "No set had enough coded answers to compare cases.", ""]
 
     h = r.headline
     return [
@@ -303,19 +305,19 @@ def _metric_tables(r: LogReport) -> list[str]:
         ["Code = value", *_ESTIMATE_COLUMNS],
         [[name, *_estimate_cells(e)] for name, e in r.code_disparities.items()],
     )
-    lines += [f"### Group gaps ({HEADLINE_CODE} = {HEADLINE_VALUE})", ""]
+    lines += [f"### Case gaps ({HEADLINE_CODE} = {HEADLINE_VALUE})", ""]
     lines += _table(
-        ["Language", "Category", "Group", "Mean gap", "Sets"],
+        ["Language", "Case set", "Case", "Mean gap", "Sets"],
         [
-            [g.language, g.category, g.group_id, GAP_FORMAT.format(g.mean_gap), str(g.sets)]
-            for g in r.group_gaps
+            [g.language, g.case_set, g.case_id, GAP_FORMAT.format(g.mean_gap), str(g.sets)]
+            for g in r.case_gaps
         ],
     )
     lines += ["### Judge failures", ""]
     lines += _table(
-        ["Language", "Category", "Group", "Failed", "Total", "Rate"],
+        ["Language", "Case set", "Case", "Failed", "Total", "Rate"],
         [
-            [f.language, f.category, f.group_id, str(f.failed), str(f.total), _rate(f.rate)]
+            [f.language, f.case_set, f.case_id, str(f.failed), str(f.total), _rate(f.rate)]
             for f in r.failures
         ],
     )
@@ -327,11 +329,11 @@ def _optional_tables(r: LogReport) -> list[str]:
     if r.leaks:
         lines += ["### Leak check", ""]
         lines += _table(
-            ["Language", "Category", "Correct", "Checked", "Rate", "Chance"],
+            ["Language", "Case set", "Correct", "Checked", "Rate", "Chance"],
             [
                 [
                     k.language,
-                    k.category,
+                    k.case_set,
                     str(k.correct),
                     str(k.checked),
                     _rate(k.rate),
@@ -385,7 +387,9 @@ def _consistency(log: EvalLog, data: BenchmarkData, size: int, grader: Model) ->
         RejudgeItem(
             redacted_question=a.redacted_question,
             redacted_answer=a.redacted_answer,
-            right_description=data.rights[a.set_info.right_id].description[a.set_info.language],
+            right_description="\n".join(
+                data.rights[r].description[a.set_info.language] for r in a.right_ids
+            ),
             language=a.set_info.language,
             codes=a.codes,
         )

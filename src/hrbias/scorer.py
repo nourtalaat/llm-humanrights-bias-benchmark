@@ -24,20 +24,24 @@ from inspect_ai.solver import TaskState
 from hrbias.codebook import CODES
 from hrbias.dataset import (
     DEFAULT_DATA_DIR,
+    Actor,
     BenchmarkData,
+    Case,
     Language,
-    category_groups,
     load_benchmark_data,
 )
 from hrbias.judge import (
     DEFAULT_JUDGE_MODEL,
     DEFAULT_JUDGE_MODEL_ARGS,
-    guess_group,
+    guess_case,
     judge_answer,
 )
-from hrbias.redact import GROUP_TOKEN, PLACE_TOKEN, redact
+from hrbias.redact import PERPETRATOR_TOKEN, VICTIM_TOKEN, redact, role_targets
 
 JUDGE_ROLE = "grader"
+LEAK_VICTIM_FORM = "people"
+LEAK_PERPETRATOR_FORM = "authority"
+LEAK_OPTION_SEPARATOR = ", "
 JUDGE_TEMPERATURE = 0.0
 
 JUDGE_STATUS = "judge_status"
@@ -66,18 +70,20 @@ def hrbias_scorer(data_dir: str | None = None, leak_check: bool = False) -> Scor
 
     The judge is the model bound to the ``grader`` role, or the pinned default
     judge when none is bound. With ``leak_check`` the judge is also asked which
-    group of the set the redacted answer is about.
+    case of the set the redacted conversation is about.
     """
     data = load_benchmark_data(Path(data_dir) if data_dir else DEFAULT_DATA_DIR)
 
     async def score(state: TaskState, target: Target) -> Score:
         meta = state.metadata
         language: Language = meta["language"]
-        terms = ({GROUP_TOKEN: meta["group_terms"], PLACE_TOKEN: meta["related_terms"]}, language)
-        question = redact(state.input_text, *terms)
-        redaction = redact(state.output.completion, *terms)
+        targets = role_targets(
+            meta["victim_terms"], meta["perpetrator_terms"], meta["context_terms"]
+        )
+        question = redact(state.input_text, targets, language)
+        redaction = redact(state.output.completion, targets, language)
         judge, judge_is_default = _judge_model()
-        right = data.rights[meta["right_id"]].description[language]
+        right = "\n".join(data.rights[r].description[language] for r in meta["right_ids"])
         result = await judge_answer(judge, question.text, redaction.text, right, language)
 
         metadata: dict[str, Any] = {
@@ -90,7 +96,8 @@ def hrbias_scorer(data_dir: str | None = None, leak_check: bool = False) -> Scor
             "judge_errors": result.errors,
         }
         if leak_check:
-            metadata.update(await _leak_check(judge, redaction.text, data, meta))
+            conversation = f"{question.text}\n\n{redaction.text}"
+            metadata.update(await _leak_check(judge, conversation, data, meta))
 
         if result.sheet is None:
             return Score(
@@ -119,15 +126,32 @@ def _judge_model() -> tuple[Model, bool]:
 async def _leak_check(
     judge: Model, redacted: str, data: BenchmarkData, meta: dict[str, Any]
 ) -> dict[str, Any]:
-    groups = category_groups(data, meta["language"], meta["category"])
-    options = {g.id: g.group_terms()[0] for g in groups}
-    leak = await guess_group(judge, redacted, options, meta["language"])
+    language: Language = meta["language"]
+    actors = data.actors[language]
+    cases = data.case_sets[language][meta["case_set"]].cases
+    options = {case.id: _case_label(case, actors) for case in cases}
+    leak = await guess_case(judge, redacted, options, language)
     return {
         "leak_options": list(options),
         "leak_guess": leak.guess,
-        "leak_correct": leak.guess == meta["group_id"],
+        "leak_correct": leak.guess == meta["case_id"],
         "leak_reply": leak.reply,
     }
+
+
+def _case_label(case: Case, actors: dict[str, Actor]) -> str:
+    parts = []
+    if case.perpetrator is not None:
+        name = _actor_name(actors[case.perpetrator], LEAK_PERPETRATOR_FORM)
+        parts.append(f"{PERPETRATOR_TOKEN} = {name}")
+
+    parts.append(f"{VICTIM_TOKEN} = {_actor_name(actors[case.victim], LEAK_VICTIM_FORM)}")
+    return LEAK_OPTION_SEPARATOR.join(parts)
+
+
+def _actor_name(actor: Actor, preferred_form: str) -> str:
+    form = actor.forms.get(preferred_form) or next(iter(actor.forms.values()))
+    return form.text
 
 
 def _status(score: Score | None) -> str | None:

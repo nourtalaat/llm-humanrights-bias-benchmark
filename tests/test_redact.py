@@ -2,7 +2,14 @@ import pytest
 from support import FIXTURE_DATA_DIR
 
 from hrbias.dataset import load_benchmark_data
-from hrbias.redact import GROUP_TOKEN, PLACE_TOKEN, Redaction, redact
+from hrbias.redact import (
+    CONTEXT_TOKEN,
+    PERPETRATOR_TOKEN,
+    VICTIM_TOKEN,
+    Redaction,
+    redact,
+    role_targets,
+)
 
 EN_VALDORIAN = ["Valdorians", "Valdorian"]
 EN_VALDORIAN_PLACES = ["Valdoria", "Selen"]
@@ -39,7 +46,7 @@ ARTICLES = {"", "ال", "ה"}
             EN_VALDORIAN,
             EN_VALDORIAN_PLACES,
             "Valdorian workers have this right.",
-            Redaction("[GROUP] workers have this right.", 1),
+            Redaction("[GROUP_B] workers have this right.", 1),
             id="en-adjective-not-inserted",
         ),
         pytest.param(
@@ -47,7 +54,9 @@ ARTICLES = {"", "ال", "ה"}
             EN_VALDORIAN,
             EN_VALDORIAN_PLACES,
             "the valdorians' union and a VALDORIAN's view, from Selen in Valdoria",
-            Redaction("the [GROUP]' union and a [GROUP]'s view, from [PLACE] in [PLACE]", 4),
+            Redaction(
+                "the [GROUP_B]' union and a [GROUP_B]'s view, from [CONTEXT] in [CONTEXT]", 4
+            ),
             id="en-case-and-possessive",
         ),
         pytest.param(
@@ -63,7 +72,7 @@ ARTICLES = {"", "ال", "ה"}
             EN_MIRAL,
             EN_MIRAL_PLACES,
             "The Sisters  of Miral run Miral Abbey; each Sister of Miral and Miral itself.",
-            Redaction("The [GROUP] run [PLACE]; each [GROUP] and [GROUP] itself.", 4),
+            Redaction("The [GROUP_B] run [CONTEXT]; each [GROUP_B] and [GROUP_B] itself.", 4),
             id="en-longest-first-place-before-group",
         ),
         pytest.param(
@@ -71,7 +80,7 @@ ARTICLES = {"", "ال", "ה"}
             AR_VALDORIAN,
             AR_VALDORIAN_PLACES,
             "يحق للفالدوريين التجمع.",
-            Redaction("يحق لل[GROUP] التجمع.", 1),
+            Redaction("يحق لل[GROUP_B] التجمع.", 1),
             id="ar-genitive-with-lam-lam",
         ),
         pytest.param(
@@ -80,7 +89,7 @@ ARTICLES = {"", "ال", "ה"}
             AR_VALDORIAN_PLACES,
             "والفالدوريون فالدوريون، وبالفالدوري وكالفالدورية، ولفالدوريات في فالدوريا.",
             Redaction(
-                "وال[GROUP] [GROUP]، وبال[GROUP] وكال[GROUP]، ول[GROUP] في [PLACE].",
+                "وال[GROUP_B] [GROUP_B]، وبال[GROUP_B] وكال[GROUP_B]، ول[GROUP_B] في [CONTEXT].",
                 6,
             ),
             id="ar-prefixes-and-article",
@@ -90,7 +99,7 @@ ARTICLES = {"", "ال", "ה"}
             AR_VALDORIAN,
             AR_VALDORIAN_PLACES,
             "أبناء الجالية الفالدورية وللجالية الفالدورية.",
-            Redaction("أبناء ال[GROUP] ولل[GROUP].", 2),
+            Redaction("أبناء ال[GROUP_B] ولل[GROUP_B].", 2),
             id="ar-multiword-term",
         ),
         pytest.param(
@@ -98,7 +107,7 @@ ARTICLES = {"", "ال", "ה"}
             AR_OMBARAN,
             [],
             "الاومباريون والإومباري.",
-            Redaction("ال[GROUP] وال[GROUP].", 2),
+            Redaction("ال[GROUP_B] وال[GROUP_B].", 2),
             id="ar-any-alif-spelling",
         ),
         pytest.param(
@@ -114,7 +123,7 @@ ARTICLES = {"", "ال", "ה"}
             HE_VALDORIAN,
             HE_VALDORIAN_PLACES,
             "יש לוולדורים זכות.",
-            Redaction("יש ל[GROUP] זכות.", 1),
+            Redaction("יש ל[GROUP_B] זכות.", 1),
             id="he-prefix-absorbs-article",
         ),
         pytest.param(
@@ -122,7 +131,7 @@ ARTICLES = {"", "ال", "ה"}
             HE_VALDORIAN,
             HE_VALDORIAN_PLACES,
             "אדם ולדורי אחד.",
-            Redaction("אדם [GROUP] אחד.", 1),
+            Redaction("אדם [GROUP_B] אחד.", 1),
             id="he-singular-single-vav",
         ),
         pytest.param(
@@ -131,7 +140,7 @@ ARTICLES = {"", "ال", "ה"}
             HE_VALDORIAN_PLACES,
             "ולוולדורים, שהוולדורים, מהוולדוריות, ל-וולדורים, ובוולדוריה ובסלן.",
             Redaction(
-                "ול[GROUP], ש[GROUP], מ[GROUP], ל-[GROUP], וב[PLACE] וב[PLACE].",
+                "ול[GROUP_B], ש[GROUP_B], מ[GROUP_B], ל-[GROUP_B], וב[CONTEXT] וב[CONTEXT].",
                 6,
             ),
             id="he-prefix-combinations",
@@ -141,7 +150,7 @@ ARTICLES = {"", "ال", "ה"}
             HE_VALDORIAN,
             HE_VALDORIAN_PLACES,
             "בני הקהילה הוולדורית ולקהילה הוולדורית.",
-            Redaction("בני [GROUP] ול[GROUP].", 2),
+            Redaction("בני [GROUP_B] ול[GROUP_B].", 2),
             id="he-multiword-term",
         ),
         pytest.param(
@@ -149,7 +158,7 @@ ARTICLES = {"", "ال", "ה"}
             ["הודים"],
             [],
             "אנו מודים לך, וגם ההודים והודים.",
-            Redaction("אנו מודים לך, וגם ה[GROUP] ו[GROUP].", 2),
+            Redaction("אנו מודים לך, וגם ה[GROUP_B] ו[GROUP_B].", 2),
             id="he-leading-he-is-part-of-the-name",
         ),
         pytest.param(
@@ -157,15 +166,15 @@ ARTICLES = {"", "ال", "ה"}
             HE_VALDORIAN,
             HE_VALDORIAN_PLACES,
             "והוולדורים ולדורים.",
-            Redaction("ו[GROUP] [GROUP].", 2),
+            Redaction("ו[GROUP_B] [GROUP_B].", 2),
             id="he-article-kept-after-vav-indefinite-listed",
         ),
         pytest.param(
             "en",
-            ["Group", "Place"],
+            ["Group", "Context"],
             ["Esk Valley"],
-            "The [GROUP] came from Esk Valley.",
-            Redaction("The [GROUP] came from [PLACE].", 1),
+            "The [GROUP_B] and [GROUP_A] came from Esk Valley.",
+            Redaction("The [GROUP_B] and [GROUP_A] came from [CONTEXT].", 1),
             id="never-replaces-inside-a-token",
         ),
         pytest.param(
@@ -173,7 +182,7 @@ ARTICLES = {"", "ال", "ה"}
             ["Miral", "Selvin"],
             ["Miral Selvin Hall"],
             "At Miral Selvin Hall, Miral and Selvin met.",
-            Redaction("At [PLACE], [GROUP] and [GROUP] met.", 3),
+            Redaction("At [CONTEXT], [GROUP_B] and [GROUP_B] met.", 3),
             id="each-position-replaced-once",
         ),
     ],
@@ -185,25 +194,68 @@ def test_redact(
     text: str,
     expected: Redaction,
 ) -> None:
-    assert redact(text, _targets(group_terms, related_terms), language) == expected
+    assert redact(text, role_targets(group_terms, [], related_terms), language) == expected
 
 
-def test_redact_removes_every_group_term_from_every_prompt() -> None:
+def test_redact_removes_every_actor_term_from_the_fixtures() -> None:
     data = load_benchmark_data(FIXTURE_DATA_DIR)
-    for language, groups in data.groups.items():
-        for group in groups:
-            text = " ".join(group.group_terms())
-            redacted = redact(text, _targets(group.group_terms(), group.related_terms), language)
+    for language, actors in data.actors.items():
+        for actor in actors.values():
+            terms = actor.terms()
+            redacted = redact(" ".join(terms), role_targets(terms, [], []), language)
 
-            assert redacted.replacements == len(group.group_terms())
+            assert redacted.replacements == len(terms)
             for word in redacted.text.split():
-                assert word.endswith(GROUP_TOKEN)
-                assert word.removesuffix(GROUP_TOKEN) in ARTICLES
+                assert word.endswith(VICTIM_TOKEN)
+                assert word.removesuffix(VICTIM_TOKEN) in ARTICLES
+
+
+@pytest.mark.parametrize(
+    ("victim", "perpetrator", "context", "text", "expected"),
+    [
+        pytest.param(
+            ["Valdorians"],
+            ["the Kestrish army"],
+            ["Orrin"],
+            "The Kestrish army says Valdorians in Orrin started it.",
+            Redaction("[GROUP_A] says [GROUP_B] in [CONTEXT] started it.", 3),
+            id="three-roles",
+        ),
+        pytest.param(
+            ["Sudara", "Sudaran"],
+            ["the Sudaran army", "Sudaran"],
+            ["Sudaran"],
+            "The Sudaran army and Sudaran families.",
+            Redaction("[GROUP_A] and [GROUP_B] families.", 2),
+            id="shared-term-goes-to-victim-longest-first",
+        ),
+        pytest.param(
+            [],
+            ["Hale"],
+            ["Hale"],
+            "Minister Hale spoke.",
+            Redaction("Minister [GROUP_A] spoke.", 1),
+            id="perpetrator-before-context",
+        ),
+    ],
+)
+def test_role_targets(
+    victim: list[str], perpetrator: list[str], context: list[str], text: str, expected: Redaction
+) -> None:
+    assert redact(text, role_targets(victim, perpetrator, context), "en") == expected
+
+
+def test_role_tokens_are_neutral() -> None:
+    assert (VICTIM_TOKEN, PERPETRATOR_TOKEN, CONTEXT_TOKEN) == (
+        "[GROUP_B]",
+        "[GROUP_A]",
+        "[CONTEXT]",
+    )
 
 
 def test_redact_rejects_unknown_language() -> None:
     with pytest.raises(ValueError, match="unsupported language 'fr'"):
-        redact("text", {GROUP_TOKEN: ["term"]}, "fr")
+        redact("text", {VICTIM_TOKEN: ["term"]}, "fr")
 
 
 @pytest.mark.parametrize(
@@ -220,7 +272,3 @@ def test_redact_rejects_unknown_language() -> None:
 )
 def test_redact_token_order(targets: dict[str, list[str]], expected: Redaction) -> None:
     assert redact("From Esk.", targets, "en") == expected
-
-
-def _targets(group_terms: list[str], related_terms: list[str]) -> dict[str, list[str]]:
-    return {GROUP_TOKEN: group_terms, PLACE_TOKEN: related_terms}

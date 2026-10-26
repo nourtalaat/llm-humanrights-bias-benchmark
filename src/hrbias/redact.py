@@ -1,11 +1,14 @@
-"""Mask group identity in a model's answer before the judge sees it.
+"""Mask who a conversation is about before the judge sees it.
 
-Redaction is deterministic: we know who each prompt was about, so the caller
-gives every token (such as ``[GROUP]``) the terms it replaces. All terms are
-matched in one pass with the longer terms tried first, so ``Miral Abbey``
-becomes ``[PLACE]`` rather than ``[GROUP] Abbey``, and no text is replaced
-twice. A term listed under several tokens gets the first of them. Tokens
-already in the text are left as they are.
+Redaction is deterministic: we know which case each prompt was filled with,
+so the caller gives every token the terms it replaces. The benchmark uses
+three tokens with neutral names, so that the judge is not told whose side to
+see: the victim's terms become ``[GROUP_B]``, the perpetrator's ``[GROUP_A]``
+and the case's context terms ``[CONTEXT]`` (see ``role_targets``). All terms
+are matched in one pass with the longer terms tried first, so ``Selen
+Valley`` can become ``[CONTEXT]`` rather than ``[GROUP_A] Valley``, and no
+text is replaced twice. A term listed under several tokens gets the first of
+them. Tokens already in the text are left as they are.
 
 Matching follows each language's spelling rules:
 
@@ -21,7 +24,7 @@ Matching follows each language's spelling rules:
   hyphen or maqaf may follow the prefixes, and a doubled ``וו`` or ``יי`` also
   matches the single letter.
 
-Attached prefixes are kept in the output (``ל[GROUP]``, ``ال[GROUP]``) so the
+Attached prefixes are kept in the output (``ל[GROUP_B]``, ``ال[GROUP_B]``) so the
 sentence still reads naturally for the judge; they say nothing about who it
 is.
 """
@@ -30,8 +33,9 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-GROUP_TOKEN = "[GROUP]"
-PLACE_TOKEN = "[PLACE]"
+PERPETRATOR_TOKEN = "[GROUP_A]"
+VICTIM_TOKEN = "[GROUP_B]"
+CONTEXT_TOKEN = "[CONTEXT]"
 
 ARABIC_ARTICLE = "ال"
 ARABIC_CONJUNCTION_PREFIXES = "وف"
@@ -101,6 +105,23 @@ def redact(text: str, targets: Mapping[str, Iterable[str]], language: str) -> Re
 
     redacted = pattern.sub(replace, text) if terms else text
     return Redaction(text=redacted, replacements=replacements)
+
+
+def role_targets(
+    victim_terms: Iterable[str],
+    perpetrator_terms: Iterable[str],
+    context_terms: Iterable[str],
+) -> dict[str, list[str]]:
+    """Map the role tokens to their terms for ``redact``.
+
+    A term listed for several roles is redacted as the victim first, then the
+    perpetrator, then context.
+    """
+    return {
+        VICTIM_TOKEN: list(victim_terms),
+        PERPETRATOR_TOKEN: list(perpetrator_terms),
+        CONTEXT_TOKEN: list(context_terms),
+    }
 
 
 def _terms_by_length(targets: Mapping[str, Iterable[str]]) -> list[tuple[str, str]]:
