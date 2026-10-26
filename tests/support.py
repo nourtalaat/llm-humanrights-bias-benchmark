@@ -7,11 +7,11 @@ from pathlib import Path
 from inspect_ai import Task, eval
 from inspect_ai.log import EvalLog
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput, get_model
-from inspect_ai.solver import generate
 from inspect_ai.tool import ToolChoice, ToolInfo
 
 from hrbias.dataset import hrbias_dataset
 from hrbias.scorer import hrbias_scorer
+from hrbias.solver import scripted_conversation
 
 MOCK_MODEL = "mockllm/model"
 FIXTURE_DATA_DIR = Path(__file__).resolve().parent / "fixtures" / "data"
@@ -56,7 +56,7 @@ def run_scored_eval(
     """Run the hrbias dataset and scorer with mockllm for the model and the grader."""
     task = Task(
         dataset=hrbias_dataset(FIXTURE_DATA_DIR, languages),
-        solver=generate(),
+        solver=scripted_conversation(),
         scorer=hrbias_scorer(data_dir=str(FIXTURE_DATA_DIR), leak_check=leak_check),
         epochs=epochs,
         metadata=metadata,
