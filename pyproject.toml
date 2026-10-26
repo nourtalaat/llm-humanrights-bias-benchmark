@@ -34,3 +34,7 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # Raised inside inspect_ai's own retry setup, not by this project.
+    "ignore:The 'initial' parameter is deprecated:DeprecationWarning",
+]

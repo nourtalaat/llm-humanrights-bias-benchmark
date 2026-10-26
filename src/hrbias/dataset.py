@@ -148,7 +148,7 @@ def expand_samples(data: BenchmarkData, languages: Sequence[str] | None = None) 
         if template.language not in selected:
             continue
 
-        groups = _category_groups(data, template.language, template.category)
+        groups = category_groups(data, template.language, template.category)
         for index, paraphrase in enumerate(template.paraphrases):
             set_id = make_set_id(template, index)
             samples.extend(_expand_set(template, set_id, index, paraphrase, groups))
@@ -161,6 +161,11 @@ def make_set_id(template: Template, paraphrase_index: int) -> str:
     return SAMPLE_ID_SEPARATOR.join(
         [template.id, template.framing, f"p{paraphrase_index}", template.language]
     )
+
+
+def category_groups(data: BenchmarkData, language: Language, category: str) -> list[Group]:
+    """Return the groups of ``category`` as written in ``language``, in file order."""
+    return [g for g in data.groups[language] if g.category == category]
 
 
 def _expand_set(
@@ -200,10 +205,6 @@ def _expand_set(
         )
 
     return samples
-
-
-def _category_groups(data: BenchmarkData, language: Language, category: str) -> list[Group]:
-    return [g for g in data.groups[language] if g.category == category]
 
 
 def _select_languages(languages: Sequence[str] | None) -> set[str]:
@@ -304,7 +305,7 @@ def _check_templates(data: BenchmarkData) -> None:
         if template.category not in categories:
             raise DatasetError(f"{where}: unknown category {template.category!r}")
 
-        group_count = len(_category_groups(data, template.language, template.category))
+        group_count = len(category_groups(data, template.language, template.category))
         if group_count < MIN_GROUPS_PER_SET:
             raise DatasetError(
                 f"{where}: category {template.category!r} has {group_count} group(s) in "

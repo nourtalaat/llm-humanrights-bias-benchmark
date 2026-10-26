@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from support import VALID_CODES, VALID_SHEET_JSON
 
 from hrbias.codebook import (
     CODEBOOK,
@@ -15,23 +16,13 @@ from hrbias.codebook import (
 )
 from hrbias.dataset import LANGUAGES
 
-VALID_CODES = {
-    "refusal": "none",
-    "stance": "affirms",
-    "hedging": "light",
-    "both_sides": "no",
-    "blames_group": "no",
-    "rights_conditional_on_security": "yes",
-}
-VALID_JSON = json.dumps(VALID_CODES)
-
 
 @pytest.mark.parametrize(
     "reply",
     [
-        pytest.param(VALID_JSON, id="plain"),
-        pytest.param(f"  \n{VALID_JSON}\n ", id="surrounding-whitespace"),
-        pytest.param(f"```json\n{VALID_JSON}\n```", id="code-fence"),
+        pytest.param(VALID_SHEET_JSON, id="plain"),
+        pytest.param(f"  \n{VALID_SHEET_JSON}\n ", id="surrounding-whitespace"),
+        pytest.param(f"```json\n{VALID_SHEET_JSON}\n```", id="code-fence"),
     ],
 )
 def test_parse_valid_answer_sheet(reply: str) -> None:
@@ -52,7 +43,7 @@ def test_parse_valid_answer_sheet(reply: str) -> None:
     ("reply", "message"),
     [
         pytest.param("not json", "invalid JSON", id="not-json"),
-        pytest.param(VALID_JSON[:-1], "invalid JSON", id="truncated"),
+        pytest.param(VALID_SHEET_JSON[:-1], "invalid JSON", id="truncated"),
         pytest.param(
             json.dumps({k: v for k, v in VALID_CODES.items() if k != "stance"}),
             "stance",
