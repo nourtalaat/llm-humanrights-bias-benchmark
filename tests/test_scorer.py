@@ -1,25 +1,20 @@
 import re
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from inspect_ai import Task, eval
 from inspect_ai.log import EvalLog, EvalSample
-from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput, get_model
+from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.scorer import Score
-from inspect_ai.solver import generate
 from inspect_ai.tool import ToolChoice, ToolInfo
-from support import MOCK_MODEL, VALID_CODES, VALID_SHEET_JSON, mock_output
+from support import MOCK_MODEL, VALID_CODES, VALID_SHEET_JSON, mock_output, run_scored_eval
 
 from hrbias.codebook import CODES
 from hrbias.dataset import hrbias_dataset, load_benchmark_data
 from hrbias.redact import GROUP_TOKEN
-from hrbias.scorer import STATUS_FAILED, STATUS_OK, hrbias_scorer
+from hrbias.scorer import STATUS_FAILED, STATUS_OK
 
 SCORER_NAME = "hrbias_scorer"
 LEAK_PROMPT_MARKERS = ("Reply with only the number", "أجب برقم اختيارك فقط", "השב במספר")
-
-Reply = Callable[[list[ChatMessage], list[ToolInfo], ToolChoice, GenerateConfig], ModelOutput]
 
 
 def test_judge_never_sees_a_group_term(tmp_path: Path) -> None:
@@ -34,7 +29,7 @@ def test_judge_never_sees_a_group_term(tmp_path: Path) -> None:
         judge_prompts.append(messages[-1].text)
         return mock_output(VALID_SHEET_JSON)
 
-    log = _run(tmp_path, judge)
+    log = run_scored_eval(tmp_path, judge)
 
     assert judge_prompts
     terms = _all_group_terms()
@@ -64,7 +59,7 @@ def test_judge_failure_is_recorded_not_dropped(tmp_path: Path) -> None:
     ) -> ModelOutput:
         return mock_output("I would rather not.")
 
-    log = _run(tmp_path, judge)
+    log = run_scored_eval(tmp_path, judge)
 
     samples = _samples(log)
     assert len(samples) == len(hrbias_dataset())
@@ -91,7 +86,7 @@ def test_leak_check(tmp_path: Path, guess_reply: str, expect_correct_for_first_g
         is_leak_prompt = any(marker in text for marker in LEAK_PROMPT_MARKERS)
         return mock_output(guess_reply if is_leak_prompt else VALID_SHEET_JSON)
 
-    log = _run(tmp_path, judge, leak_check=True)
+    log = run_scored_eval(tmp_path, judge, leak_check=True)
 
     for sample in _samples(log):
         meta = _score(sample).metadata
@@ -101,31 +96,6 @@ def test_leak_check(tmp_path: Path, guess_reply: str, expect_correct_for_first_g
         expected_correct = expect_correct_for_first_group and is_first
         assert meta["leak_correct"] is expected_correct
         assert meta["leak_reply"] == guess_reply
-
-
-def _run(tmp_path: Path, judge: Reply, leak_check: bool = False) -> EvalLog:
-    def echo(
-        messages: list[ChatMessage],
-        tools: list[ToolInfo],
-        tool_choice: ToolChoice,
-        config: GenerateConfig,
-    ) -> ModelOutput:
-        return mock_output(f"About this: {messages[-1].text}")
-
-    task = Task(
-        dataset=hrbias_dataset(),
-        solver=generate(),
-        scorer=hrbias_scorer(leak_check=leak_check),
-    )
-    [log] = eval(
-        task,
-        model=get_model(MOCK_MODEL, custom_outputs=echo),
-        model_roles={"grader": get_model(MOCK_MODEL, custom_outputs=judge)},
-        log_dir=str(tmp_path),
-        display="none",
-    )
-    assert log.status == "success", log.error
-    return log
 
 
 def _samples(log: EvalLog) -> list[EvalSample]:

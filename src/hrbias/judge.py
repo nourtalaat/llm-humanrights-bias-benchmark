@@ -9,9 +9,10 @@ The default judge is pinned in one place below. Results are only comparable
 across runs that used this exact Hugging Face repository and revision.
 """
 
+import asyncio
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -180,11 +181,27 @@ class LeakGuess:
 
 
 @dataclass(frozen=True)
-class LabelAgreement:
-    """Agreement between human labels and judge codes, per code."""
+class CodeAgreement:
+    """Share of answers where two codings chose the same value, per code.
+
+    ``compared`` counts the answers both codings covered; ``judge_failures``
+    counts answers left out because the judge gave no valid sheet.
+    """
 
     per_code: dict[str, float]
     compared: int
+    judge_failures: int = 0
+
+
+@dataclass(frozen=True)
+class RejudgeItem:
+    """A judged answer to code again, with the codes it got the first time."""
+
+    redacted_question: str
+    redacted_answer: str
+    right_description: str
+    language: Language
+    codes: Mapping[str, str | None]
 
 
 class _Label(BaseModel):
@@ -279,7 +296,30 @@ async def guess_group(
     return LeakGuess(guess=guess, reply=reply)
 
 
-def label_agreement(labels_path: Path, judged: Mapping[str, Mapping[str, str]]) -> LabelAgreement:
+async def judge_consistency(model: Model, items: Sequence[RejudgeItem]) -> CodeAgreement:
+    """Code ``items`` again with ``model`` and compare with their first codes."""
+    results = await asyncio.gather(
+        *(
+            judge_answer(
+                model,
+                item.redacted_question,
+                item.redacted_answer,
+                item.right_description,
+                item.language,
+            )
+            for item in items
+        )
+    )
+    pairs = [
+        (dict(item.codes), result.sheet.codes())
+        for item, result in zip(items, results, strict=True)
+        if result.sheet is not None
+    ]
+    failures = sum(1 for result in results if result.failed)
+    return _agreement(pairs, judge_failures=failures)
+
+
+def label_agreement(labels_path: Path, judged: Mapping[str, Mapping[str, str]]) -> CodeAgreement:
     """Compare human labels with judge codes, for a future human-labeled set.
 
     ``labels_path`` is a JSONL file with one ``{"id": <sample id>, "codes":
@@ -288,15 +328,13 @@ def label_agreement(labels_path: Path, judged: Mapping[str, Mapping[str, str]]) 
     ``judged`` where the judge chose the same value.
     """
     labels = _read_labels(labels_path)
-    pairs = [(label.codes.codes(), judged[label.id]) for label in labels if label.id in judged]
+    pairs = [
+        (label.codes.codes(), dict(judged[label.id])) for label in labels if label.id in judged
+    ]
     if not pairs:
         raise JudgeError(f"label agreement {labels_path}: no labeled sample was judged")
 
-    per_code = {
-        code: sum(1 for human, judge in pairs if human[code] == judge.get(code)) / len(pairs)
-        for code in CODES
-    }
-    return LabelAgreement(per_code=per_code, compared=len(pairs))
+    return _agreement(pairs)
 
 
 def _read_labels(path: Path) -> list[_Label]:
@@ -316,3 +354,17 @@ def _read_labels(path: Path) -> list[_Label]:
             raise JudgeError(f"read labels {path} line {number}: {err}") from err
 
     return labels
+
+
+def _agreement(
+    pairs: Sequence[tuple[Mapping[str, str | None], Mapping[str, str | None]]],
+    judge_failures: int = 0,
+) -> CodeAgreement:
+    if not pairs:
+        return CodeAgreement(per_code={}, compared=0, judge_failures=judge_failures)
+
+    per_code = {
+        code: sum(1 for first, second in pairs if first.get(code) == second.get(code)) / len(pairs)
+        for code in CODES
+    }
+    return CodeAgreement(per_code=per_code, compared=len(pairs), judge_failures=judge_failures)
