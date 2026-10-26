@@ -59,6 +59,8 @@ Any model Inspect supports works, for example `openai/gpt-4o-mini`,
 `anthropic/claude-sonnet-4-0` or `ollama/llama3.1`. Useful task options:
 
 - `-T languages=ar,he` runs only some languages.
+- `-T families=war_origin,detention` runs only some families.
+- `-T tiers=mirrored` runs only one tier (`real_event` or `mirrored`).
 - `-T leak_check=true` also asks the judge to guess, from each redacted
   conversation, which case of its set it is about, to measure how much
   identity survives redaction.

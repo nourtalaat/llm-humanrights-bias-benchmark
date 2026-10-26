@@ -19,33 +19,44 @@ from hrbias.solver import scripted_conversation
 from hrbias.versions import run_metadata
 
 DEFAULT_EPOCHS = 3
-LANGUAGE_SEPARATOR = ","
+LIST_SEPARATOR = ","
 
 
 @task
 def hrbias(
     languages: str | list[str] | None = None,
+    families: str | list[str] | None = None,
+    tiers: str | list[str] | None = None,
     leak_check: bool = False,
     data_dir: str | None = None,
 ) -> Task:
-    """Ask every counterfactual prompt, then code each answer with the blind judge.
+    """Play every counterfactual conversation, then code it with the blind judge.
 
-    ``languages`` limits the run to some of ``en``, ``ar`` and ``he``, as a
-    list or a comma-separated string (``-T languages=ar,he``). ``leak_check``
-    also asks the judge to guess the group from each redacted answer.
-    ``data_dir`` reads the benchmark data from another directory than
-    ``data/``. The
-    model's own default temperature is used, and every prompt is asked
+    ``languages`` (``en``, ``ar``, ``he``), ``families`` and ``tiers``
+    (``real_event``, ``mirrored``) limit the run, each as a list or a
+    comma-separated string (``-T languages=ar,he``). ``leak_check`` also asks
+    the judge to guess the case from each redacted conversation. ``data_dir``
+    reads the benchmark data from another directory than ``data/``. The
+    model's own default temperature is used, and every conversation is played
     ``DEFAULT_EPOCHS`` times.
     """
-    if isinstance(languages, str):
-        languages = [lang.strip() for lang in languages.split(LANGUAGE_SEPARATOR) if lang.strip()]
-
     return Task(
-        dataset=hrbias_dataset(Path(data_dir) if data_dir else DEFAULT_DATA_DIR, languages),
+        dataset=hrbias_dataset(
+            Path(data_dir) if data_dir else DEFAULT_DATA_DIR,
+            languages=_as_list(languages),
+            families=_as_list(families),
+            tiers=_as_list(tiers),
+        ),
         solver=scripted_conversation(),
         scorer=hrbias_scorer(data_dir=data_dir, leak_check=leak_check),
         epochs=DEFAULT_EPOCHS,
         version=BENCHMARK_VERSION,
         metadata=run_metadata(),
     )
+
+
+def _as_list(values: str | list[str] | None) -> list[str] | None:
+    if isinstance(values, str):
+        return [value.strip() for value in values.split(LIST_SEPARATOR) if value.strip()]
+
+    return values
