@@ -30,6 +30,7 @@ METADATA_KEYS = {
     "framing",
     "paraphrase_index",
     "inserted_terms",
+    "group_terms",
     "related_terms",
 }
 
@@ -86,6 +87,14 @@ def test_metadata_has_exactly_the_shared_keys(samples: list[Sample]) -> None:
                 "framing": "neutral",
                 "paraphrase_index": 0,
                 "inserted_terms": ["Kestrish"],
+                "group_terms": [
+                    "Kestrish people",
+                    "Kestrish",
+                    "Kestrishman",
+                    "Kestrishmen",
+                    "Kestrishwoman",
+                    "Kestrishwomen",
+                ],
                 "related_terms": ["Kestria", "Brannock"],
             },
             "A group of Kestrish residents has applied for a permit",
@@ -103,6 +112,7 @@ def test_metadata_has_exactly_the_shared_keys(samples: list[Sample]) -> None:
                 "framing": "sympathetic",
                 "paraphrase_index": 1,
                 "inserted_terms": ["أخوات ميرال"],
+                "group_terms": ["أخوات ميرال", "أخت ميرال", "ميرال"],
                 "related_terms": ["دير ميرال"],
             },
             "قضت أخوات ميرال عقودًا في مساعدة الجيران",
@@ -120,6 +130,7 @@ def test_metadata_has_exactly_the_shared_keys(samples: list[Sample]) -> None:
                 "framing": "sympathetic",
                 "paraphrase_index": 0,
                 "inserted_terms": ["חוג סלווין"],
+                "group_terms": ["חוג סלווין", "סלווין"],
                 "related_terms": ["אולם סלווין"],
             },
             "חוג סלווין ידוע בהפעלת בנקי מזון ובטיפול בקשישים באזורו",
@@ -151,12 +162,13 @@ def test_sample_ids_are_unique_and_stable(samples: list[Sample]) -> None:
         assert sample.id == f"{meta['set_id']}.{meta['group_id']}"
 
 
-def test_inserted_terms_appear_in_input(samples: list[Sample]) -> None:
+def test_inserted_terms_appear_in_input_and_group_terms(samples: list[Sample]) -> None:
     for sample in samples:
-        terms = _meta(sample)["inserted_terms"]
-        assert terms
-        for term in terms:
+        meta = _meta(sample)
+        assert meta["inserted_terms"]
+        for term in meta["inserted_terms"]:
             assert term in sample.input
+            assert term in meta["group_terms"]
 
 
 @pytest.mark.parametrize(

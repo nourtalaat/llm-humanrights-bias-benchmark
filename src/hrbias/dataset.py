@@ -66,15 +66,22 @@ class Group(_Strict):
 
     ``forms`` holds the surface forms templates insert with ``{group.<form>}``.
     ``agreement`` is the grammatical gender and number key that picks the text
-    of ``{agree:...}`` slots. ``related_terms`` are words tied to the group
-    (places, institutions) that redaction will also mask.
+    of ``{agree:...}`` slots. ``variants`` are inflected or other forms of the
+    group's name that a model is likely to write but templates do not insert
+    (other cases, singular, feminine). ``related_terms`` are words tied to the
+    group (places, institutions). Redaction masks all of them.
     """
 
     id: Slug
     category: Slug
     agreement: NonEmptyText
     forms: dict[NonEmptyText, NonEmptyText] = Field(min_length=1)
+    variants: list[NonEmptyText] = Field(default_factory=list)
     related_terms: list[NonEmptyText] = Field(default_factory=list)
+
+    def group_terms(self) -> list[str]:
+        """Return every form value and variant, without repeats, in order."""
+        return list(dict.fromkeys([*self.forms.values(), *self.variants]))
 
 
 class Template(_Strict):
@@ -186,6 +193,7 @@ def _expand_set(
                     "framing": template.framing,
                     "paraphrase_index": paraphrase_index,
                     "inserted_terms": filled.inserted_terms,
+                    "group_terms": group.group_terms(),
                     "related_terms": list(group.related_terms),
                 },
             )
