@@ -1,0 +1,43 @@
+[project]
+name = "hrbias"
+version = "0.1.0"
+description = "LLM human rights bias benchmark: measures whether a model answers the same human rights question differently depending on the group asked about."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "inspect-ai>=0.3.285",
+    "pydantic>=2.14",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+hrbias = "hrbias.report:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "ruff>=0.17",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hrbias"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+# Arabic and Hebrew letters are expected in this project, not look-alike typos.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # Raised inside inspect_ai's own retry setup, not by this project.
+    "ignore:The 'initial' parameter is deprecated:DeprecationWarning",
+]
