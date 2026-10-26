@@ -1,15 +1,16 @@
-"""Inspect scorer: redact question and answer, have the blind judge code it, store codes.
+"""Inspect scorer: redact the conversation, have the blind judge code it, store codes.
 
-``Score.value`` is a dict with ``judge_status`` (``ok`` or ``failed``) and one
-entry per codebook code (``None`` when the judge failed). Bias metrics compare
-answers across samples, so they are computed from the logs by ``metrics.py``,
-not here.
+``Score.value`` is a flat dict: ``judge_status`` (``ok`` or ``failed``) and
+one entry per assistant turn and code, keyed like ``t1.stance`` or
+``t2.position_change`` (all ``None`` when the judge failed). Bias metrics
+compare conversations across samples, so they are computed from the logs by
+``metrics.py``, not here.
 """
 
 from pathlib import Path
 from typing import Any
 
-from inspect_ai.model import GenerateConfig, Model, get_model, model_roles
+from inspect_ai.model import ChatMessage, GenerateConfig, Model, get_model, model_roles
 from inspect_ai.scorer import (
     Metric,
     SampleScore,
@@ -21,7 +22,7 @@ from inspect_ai.scorer import (
 )
 from inspect_ai.solver import TaskState
 
-from hrbias.codebook import CODES
+from hrbias.codebook import sheet_keys
 from hrbias.dataset import (
     DEFAULT_DATA_DIR,
     Actor,
@@ -31,17 +32,19 @@ from hrbias.dataset import (
     load_benchmark_data,
 )
 from hrbias.judge import (
+    ASSISTANT,
     DEFAULT_JUDGE_MODEL,
     DEFAULT_JUDGE_MODEL_ARGS,
+    USER,
+    Turn,
+    assistant_turns,
     guess_case,
-    judge_answer,
+    judge_transcript,
+    render_conversation,
 )
 from hrbias.redact import PERPETRATOR_TOKEN, VICTIM_TOKEN, redact, role_targets
 
 JUDGE_ROLE = "grader"
-LEAK_VICTIM_FORM = "people"
-LEAK_PERPETRATOR_FORM = "authority"
-LEAK_OPTION_SEPARATOR = ", "
 JUDGE_TEMPERATURE = 0.0
 
 JUDGE_STATUS = "judge_status"
@@ -49,10 +52,14 @@ STATUS_OK = "ok"
 STATUS_FAILED = "failed"
 GRADER_FAILED_REASON = "grader_failed"
 
+LEAK_VICTIM_FORM = "people"
+LEAK_PERPETRATOR_FORM = "authority"
+LEAK_OPTION_SEPARATOR = ", "
+
 
 @metric
 def judge_success_rate() -> Metric:
-    """Share of answers the judge coded successfully."""
+    """Share of conversations the judge coded successfully."""
 
     def compute(scores: list[SampleScore]) -> float:
         if not scores:
@@ -66,50 +73,64 @@ def judge_success_rate() -> Metric:
 
 @scorer(metrics=[judge_success_rate()])
 def hrbias_scorer(data_dir: str | None = None, leak_check: bool = False) -> Scorer:
-    """Score each answer by redacting it and its question, then asking the blind judge.
+    """Score each conversation by redacting every turn, then asking the blind judge.
 
     The judge is the model bound to the ``grader`` role, or the pinned default
-    judge when none is bound. With ``leak_check`` the judge is also asked which
-    case of the set the redacted conversation is about.
+    judge when none is bound. With ``leak_check`` the judge is also asked
+    which case of the set the redacted conversation is about.
     """
     data = load_benchmark_data(Path(data_dir) if data_dir else DEFAULT_DATA_DIR)
 
     async def score(state: TaskState, target: Target) -> Score:
         meta = state.metadata
         language: Language = meta["language"]
-        targets = role_targets(
-            meta["victim_terms"], meta["perpetrator_terms"], meta["context_terms"]
-        )
-        question = redact(state.input_text, targets, language)
-        redaction = redact(state.output.completion, targets, language)
+        transcript, replacements = redact_transcript(state.messages, meta)
+        rights = [data.rights[r].description[language] for r in meta["right_ids"]]
         judge, judge_is_default = _judge_model()
-        right = "\n".join(data.rights[r].description[language] for r in meta["right_ids"])
-        result = await judge_answer(judge, question.text, redaction.text, right, language)
+        result = await judge_transcript(judge, transcript, rights, meta["family"], language)
 
         metadata: dict[str, Any] = {
-            "redacted_question": question.text,
-            "redacted_answer": redaction.text,
-            "replacements": redaction.replacements,
+            "redacted_transcript": [{"role": t.role, "text": t.text} for t in transcript],
+            "replacements": replacements,
             "judge_model": str(judge),
             "judge_is_default": judge_is_default,
             "judge_replies": result.replies,
             "judge_errors": result.errors,
         }
         if leak_check:
-            conversation = f"{question.text}\n\n{redaction.text}"
-            metadata.update(await _leak_check(judge, conversation, data, meta))
+            metadata.update(await _leak_check(judge, transcript, data, meta))
 
-        if result.sheet is None:
+        if result.codes is None:
+            keys = sheet_keys(meta["family"], assistant_turns(transcript))
             return Score(
-                value={JUDGE_STATUS: STATUS_FAILED, **dict.fromkeys(CODES)},
+                value={JUDGE_STATUS: STATUS_FAILED, **dict.fromkeys(keys)},
                 reason=GRADER_FAILED_REASON,
                 explanation="; ".join(result.errors),
                 metadata=metadata,
             )
 
-        return Score(value={JUDGE_STATUS: STATUS_OK, **result.sheet.codes()}, metadata=metadata)
+        return Score(value={JUDGE_STATUS: STATUS_OK, **result.codes}, metadata=metadata)
 
     return score
+
+
+def redact_transcript(messages: list[ChatMessage], meta: dict[str, Any]) -> tuple[list[Turn], int]:
+    """Redact every user and assistant message, in order, with the sample's role terms.
+
+    Returns the redacted turns and the number of replacements made in the
+    assistant turns.
+    """
+    targets = role_targets(meta["victim_terms"], meta["perpetrator_terms"], meta["context_terms"])
+    transcript = []
+    replacements = 0
+    for message in messages:
+        if message.role == USER or message.role == ASSISTANT:
+            redaction = redact(message.text, targets, meta["language"])
+            transcript.append(Turn(role=message.role, text=redaction.text))
+            if message.role == ASSISTANT:
+                replacements += redaction.replacements
+
+    return transcript, replacements
 
 
 def _judge_model() -> tuple[Model, bool]:
@@ -124,13 +145,13 @@ def _judge_model() -> tuple[Model, bool]:
 
 
 async def _leak_check(
-    judge: Model, redacted: str, data: BenchmarkData, meta: dict[str, Any]
+    judge: Model, transcript: list[Turn], data: BenchmarkData, meta: dict[str, Any]
 ) -> dict[str, Any]:
     language: Language = meta["language"]
     actors = data.actors[language]
     cases = data.case_sets[language][meta["case_set"]].cases
     options = {case.id: _case_label(case, actors) for case in cases}
-    leak = await guess_case(judge, redacted, options, language)
+    leak = await guess_case(judge, render_conversation(transcript), options, language)
     return {
         "leak_options": list(options),
         "leak_guess": leak.guess,

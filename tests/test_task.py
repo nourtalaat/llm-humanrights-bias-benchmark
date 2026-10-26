@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from inspect_ai import eval
 from inspect_ai.model import get_model
-from support import FIXTURE_DATA_DIR, MOCK_MODEL, VALID_SHEET_JSON, echo_model, mock_output
+from support import FIXTURE_DATA_DIR, MOCK_MODEL, coding_judge, echo_model
 
 from hrbias import BENCHMARK_VERSION
 from hrbias.dataset import hrbias_dataset
@@ -14,7 +14,7 @@ from hrbias.versions import run_metadata
 
 def test_end_to_end_eval_and_report(tmp_path: Path) -> None:
     log_dir = tmp_path / "logs"
-    grader = get_model(MOCK_MODEL, custom_outputs=lambda *_: mock_output(VALID_SHEET_JSON))
+    grader = get_model(MOCK_MODEL, custom_outputs=coding_judge())
 
     [log] = eval(
         hrbias(data_dir=str(FIXTURE_DATA_DIR)),
@@ -34,7 +34,7 @@ def test_end_to_end_eval_and_report(tmp_path: Path) -> None:
     assert main(["report", str(log_dir), "--data-dir", str(FIXTURE_DATA_DIR)]) == 0
     markdown = (log_dir / REPORT_MARKDOWN).read_text(encoding="utf-8")
     assert (log_dir / REPORT_JSON).is_file()
-    assert 'Mean set disparity in "stance = affirms": 0.000' in markdown
+    assert "| detention | t1.stance = affirms | 0.000 |" in markdown
     assert "answers were coded by a non-default judge: mockllm/model" in markdown
 
 
