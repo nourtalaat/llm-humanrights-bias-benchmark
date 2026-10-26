@@ -2,7 +2,7 @@ import pytest
 from support import FIXTURE_DATA_DIR
 
 from hrbias.dataset import load_benchmark_data
-from hrbias.redact import GROUP_TOKEN, Redaction, redact
+from hrbias.redact import GROUP_TOKEN, PLACE_TOKEN, Redaction, redact
 
 EN_VALDORIAN = ["Valdorians", "Valdorian"]
 EN_VALDORIAN_PLACES = ["Valdoria", "Selen"]
@@ -185,7 +185,7 @@ def test_redact(
     text: str,
     expected: Redaction,
 ) -> None:
-    assert redact(text, group_terms, related_terms, language) == expected
+    assert redact(text, _targets(group_terms, related_terms), language) == expected
 
 
 def test_redact_removes_every_group_term_from_every_prompt() -> None:
@@ -193,7 +193,7 @@ def test_redact_removes_every_group_term_from_every_prompt() -> None:
     for language, groups in data.groups.items():
         for group in groups:
             text = " ".join(group.group_terms())
-            redacted = redact(text, group.group_terms(), group.related_terms, language)
+            redacted = redact(text, _targets(group.group_terms(), group.related_terms), language)
 
             assert redacted.replacements == len(group.group_terms())
             for word in redacted.text.split():
@@ -203,4 +203,24 @@ def test_redact_removes_every_group_term_from_every_prompt() -> None:
 
 def test_redact_rejects_unknown_language() -> None:
     with pytest.raises(ValueError, match="unsupported language 'fr'"):
-        redact("text", ["term"], [], "fr")
+        redact("text", {GROUP_TOKEN: ["term"]}, "fr")
+
+
+@pytest.mark.parametrize(
+    ("targets", "expected"),
+    [
+        pytest.param(
+            {"[A]": ["Esk"], "[B]": ["Esk"]}, Redaction("From [A].", 1), id="first-token-wins"
+        ),
+        pytest.param(
+            {"[B]": ["Esk"], "[A]": ["Esk"]}, Redaction("From [B].", 1), id="order-decides"
+        ),
+        pytest.param({}, Redaction("From Esk.", 0), id="no-targets"),
+    ],
+)
+def test_redact_token_order(targets: dict[str, list[str]], expected: Redaction) -> None:
+    assert redact("From Esk.", targets, "en") == expected
+
+
+def _targets(group_terms: list[str], related_terms: list[str]) -> dict[str, list[str]]:
+    return {GROUP_TOKEN: group_terms, PLACE_TOKEN: related_terms}

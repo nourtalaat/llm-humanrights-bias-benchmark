@@ -1,11 +1,11 @@
 """Mask group identity in a model's answer before the judge sees it.
 
-Redaction is deterministic: we know which group each prompt was about, so we
-replace that group's names (``group_terms``) with ``[GROUP]`` and its related
-places and institutions (``related_terms``) with ``[PLACE]``. All terms are
+Redaction is deterministic: we know who each prompt was about, so the caller
+gives every token (such as ``[GROUP]``) the terms it replaces. All terms are
 matched in one pass with the longer terms tried first, so ``Miral Abbey``
 becomes ``[PLACE]`` rather than ``[GROUP] Abbey``, and no text is replaced
-twice. Tokens already in the text are left as they are.
+twice. A term listed under several tokens gets the first of them. Tokens
+already in the text are left as they are.
 
 Matching follows each language's spelling rules:
 
@@ -22,12 +22,12 @@ Matching follows each language's spelling rules:
   matches the single letter.
 
 Attached prefixes are kept in the output (``ל[GROUP]``, ``ال[GROUP]``) so the
-sentence still reads naturally for the judge; they say nothing about which
-group it is.
+sentence still reads naturally for the judge; they say nothing about who it
+is.
 """
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 GROUP_TOKEN = "[GROUP]"
@@ -74,19 +74,16 @@ class Redaction:
     replacements: int
 
 
-def redact(
-    text: str,
-    group_terms: Iterable[str],
-    related_terms: Iterable[str],
-    language: str,
-) -> Redaction:
-    """Replace group terms with ``[GROUP]`` and related terms with ``[PLACE]``.
+def redact(text: str, targets: Mapping[str, Iterable[str]], language: str) -> Redaction:
+    """Replace the terms of every token in ``targets`` with that token.
 
-    A term listed in both groups is treated as a group term.
+    ``targets`` maps each token to the terms it replaces. When a term is
+    listed under several tokens, the token that comes first in ``targets``
+    wins.
     """
-    targets = _targets(group_terms, related_terms)
-    pattern = _combined_pattern([term for term, _ in targets], language)
-    tokens = [token for _, token in targets]
+    terms = _terms_by_length(targets)
+    pattern = _combined_pattern([term for term, _ in terms], list(targets), language)
+    tokens = [token for _, token in terms]
     replacements = 0
 
     def replace(match: re.Match[str]) -> str:
@@ -102,24 +99,21 @@ def redact(
         )
         return f"{match['prefix']}{token}{match['suffix']}"
 
-    redacted = pattern.sub(replace, text) if targets else text
+    redacted = pattern.sub(replace, text) if terms else text
     return Redaction(text=redacted, replacements=replacements)
 
 
-def _targets(group_terms: Iterable[str], related_terms: Iterable[str]) -> list[tuple[str, str]]:
+def _terms_by_length(targets: Mapping[str, Iterable[str]]) -> list[tuple[str, str]]:
     tokens: dict[str, str] = {}
-    for term in related_terms:
-        if term.strip():
-            tokens[term.strip()] = PLACE_TOKEN
-
-    for term in group_terms:
-        if term.strip():
-            tokens[term.strip()] = GROUP_TOKEN
+    for token, terms in reversed(list(targets.items())):
+        for term in terms:
+            if term.strip():
+                tokens[term.strip()] = token
 
     return sorted(tokens.items(), key=lambda item: len(item[0]), reverse=True)
 
 
-def _combined_pattern(terms: list[str], language: str) -> re.Pattern[str]:
+def _combined_pattern(terms: list[str], tokens: list[str], language: str) -> re.Pattern[str]:
     if language == "ar":
         prefix, suffix, flags, core = _ARABIC_PREFIX, "", 0, _arabic_core
     elif language == "he":
@@ -130,7 +124,7 @@ def _combined_pattern(terms: list[str], language: str) -> re.Pattern[str]:
         raise ValueError(f"redact: unsupported language {language!r}")
 
     alternatives = "|".join(f"(?P<{_TERM_GROUP}{i}>{core(t)})" for i, t in enumerate(terms))
-    keep = "|".join(re.escape(token) for token in (GROUP_TOKEN, PLACE_TOKEN))
+    keep = "|".join(re.escape(token) for token in tokens)
     return re.compile(
         f"(?P<{_KEEP_GROUP}>{keep})|{_NOT_AFTER_WORD}(?P<prefix>{prefix})"
         f"(?:{alternatives})(?P<suffix>{suffix}){_NOT_BEFORE_WORD}",

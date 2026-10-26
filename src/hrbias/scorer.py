@@ -35,7 +35,7 @@ from hrbias.judge import (
     guess_group,
     judge_answer,
 )
-from hrbias.redact import redact
+from hrbias.redact import GROUP_TOKEN, PLACE_TOKEN, redact
 
 JUDGE_ROLE = "grader"
 JUDGE_TEMPERATURE = 0.0
@@ -73,7 +73,7 @@ def hrbias_scorer(data_dir: str | None = None, leak_check: bool = False) -> Scor
     async def score(state: TaskState, target: Target) -> Score:
         meta = state.metadata
         language: Language = meta["language"]
-        terms = (meta["group_terms"], meta["related_terms"], language)
+        terms = ({GROUP_TOKEN: meta["group_terms"], PLACE_TOKEN: meta["related_terms"]}, language)
         question = redact(state.input_text, *terms)
         redaction = redact(state.output.completion, *terms)
         judge, judge_is_default = _judge_model()
