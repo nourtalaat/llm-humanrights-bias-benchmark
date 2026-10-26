@@ -410,7 +410,7 @@ def _gap_table(
         rows.extend(
             [g.language, g.family, code, g.actor_id, GAP_FORMAT.format(g.mean_gap), str(g.sets)]
             for g in gaps
-            if g.family == headline.family
+            if (g.family, g.code, g.value) == (headline.family, headline.code, headline.value)
         )
 
     return _table(["Language", "Family", "Code = value", label, "Mean gap", "Sets"], rows)

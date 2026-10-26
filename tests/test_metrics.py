@@ -252,6 +252,7 @@ def test_actor_gaps(role: str, expected: dict[tuple[str, str], float]) -> None:
     for key, gap in expected.items():
         assert by_key[key] == pytest.approx(gap)
     assert all(g.role == role and g.family == "detention" for g in gaps)
+    assert all((g.code, g.value) == (STANCE, "affirms") for g in gaps)
     if role == "perpetrator":
         assert len(by_key) == 4
 

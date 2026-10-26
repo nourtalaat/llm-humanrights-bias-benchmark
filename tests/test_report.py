@@ -3,10 +3,19 @@ from itertools import count
 from pathlib import Path
 
 import pytest
-from support import FIXTURE_DATA_DIR, Reply, coding_judge, run_scored_eval
+from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
+from inspect_ai.tool import ToolChoice, ToolInfo
+from support import (
+    FIXTURE_DATA_DIR,
+    Reply,
+    coding_judge,
+    mock_output,
+    run_scored_eval,
+    sheet_for_prompt,
+)
 
 from hrbias import BENCHMARK_VERSION
-from hrbias.report import REPORT_JSON, REPORT_MARKDOWN, main
+from hrbias.report import GAP_FORMAT, REPORT_JSON, REPORT_MARKDOWN, main
 from hrbias.versions import run_metadata
 
 NON_DEFAULT_JUDGE = "answers were coded by a non-default judge: mockllm/model"
@@ -95,6 +104,67 @@ def test_report_writes_markdown_and_json(
     assert "| en | detention | t1.stance = affirms | kestrish |" in markdown
     assert "| en | detention | t1.stance = affirms | kestrish-army |" in markdown
     assert "| Tier | Language | Case set | Case | Failed | Total | Rate |" in markdown
+
+
+WAR_ORIGIN_GAPS = {
+    "victim": {
+        ("t2.responsibility", "perpetrator", "valdorians"): "+0.500",
+        ("t2.responsibility", "perpetrator", "kestrish"): "-0.500",
+        ("t3.position_change", "holds", "valdorians"): "+0.000",
+        ("t3.position_change", "holds", "kestrish"): "+0.000",
+    },
+    "perpetrator": {
+        ("t2.responsibility", "perpetrator", "kestrish-army"): "+0.500",
+        ("t2.responsibility", "perpetrator", "valdorian-government"): "-0.500",
+        ("t3.position_change", "holds", "kestrish-army"): "+0.000",
+        ("t3.position_change", "holds", "valdorian-government"): "+0.000",
+    },
+}
+
+
+def test_gap_tables_label_each_headline_of_a_two_headline_family(tmp_path: Path) -> None:
+    def judge(
+        messages: list[ChatMessage],
+        tools: list[ToolInfo],
+        tool_choice: ToolChoice,
+        config: GenerateConfig,
+    ) -> ModelOutput:
+        prompt = messages[0].text
+        blames_group_a = "2031" in prompt
+
+        def choose(turn: str, code: str) -> str | None:
+            if code == "responsibility":
+                return "group_a" if blames_group_a else "group_b"
+
+            return "holds" if code == "position_change" else None
+
+        return mock_output(json.dumps(sheet_for_prompt(prompt, choose)))
+
+    log_dir = tmp_path / "logs"
+    run_scored_eval(log_dir, judge, languages=["en"], tiers=["real_event"])
+
+    assert main(["report", str(log_dir), "--data-dir", str(FIXTURE_DATA_DIR)]) == 0
+
+    [report] = json.loads((log_dir / REPORT_JSON).read_text(encoding="utf-8"))
+    [tier] = report["tiers"]
+    markdown = (log_dir / REPORT_MARKDOWN).read_text(encoding="utf-8")
+    victim_section, _, perpetrator_section = markdown.partition("#### Perpetrator gaps")
+    sections = {
+        "victim": victim_section.partition("#### Victim gaps")[2],
+        "perpetrator": perpetrator_section,
+    }
+    for role, expected in WAR_ORIGIN_GAPS.items():
+        gaps = {
+            (g["code"], g["value"], g["actor_id"]): GAP_FORMAT.format(g["mean_gap"])
+            for g in tier[f"{role}_gaps"]
+            if g["family"] == "war_origin"
+        }
+        assert len([g for g in tier[f"{role}_gaps"] if g["family"] == "war_origin"]) == 4
+        assert gaps == expected
+        rows = [line for line in sections[role].splitlines() if "| war_origin |" in line]
+        assert len(rows) == 4
+        for (code, value, actor), gap in expected.items():
+            assert f"| en | war_origin | {code} = {value} | {actor} | {gap} | 3 |" in rows
 
 
 def test_report_consistency_check_records_judge_failures(tmp_path: Path) -> None:

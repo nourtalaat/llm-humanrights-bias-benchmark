@@ -158,12 +158,14 @@ class Estimate:
 
 @dataclass(frozen=True)
 class ActorGap:
-    """An actor's case gap, as victim or as perpetrator, averaged over its sets."""
+    """An actor's case gap for ``code == value``, as victim or perpetrator, over its sets."""
 
     role: str
     tier: str
     language: str
     family: str
+    code: str
+    value: str
     actor_id: str
     mean_gap: float
     sets: int
@@ -407,7 +409,7 @@ def actor_gaps(gaps: Iterable[CaseGap], role: str, code: str, value: str) -> lis
             by_actor[(info.tier, info.language, info.family, actor_id)].append(g.gap)
 
     return [
-        ActorGap(role, tier, language, family, actor_id, fmean(values), len(values))
+        ActorGap(role, tier, language, family, code, value, actor_id, fmean(values), len(values))
         for (tier, language, family, actor_id), values in sorted(by_actor.items())
     ]
 
