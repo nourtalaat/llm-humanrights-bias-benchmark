@@ -14,6 +14,7 @@ from hrbias.dataset import hrbias_dataset
 from hrbias.scorer import hrbias_scorer
 
 MOCK_MODEL = "mockllm/model"
+FIXTURE_DATA_DIR = Path(__file__).resolve().parent / "fixtures" / "data"
 
 VALID_CODES = {
     "refusal": "none",
@@ -54,9 +55,9 @@ def run_scored_eval(
 ) -> EvalLog:
     """Run the hrbias dataset and scorer with mockllm for the model and the grader."""
     task = Task(
-        dataset=hrbias_dataset(languages=languages),
+        dataset=hrbias_dataset(FIXTURE_DATA_DIR, languages),
         solver=generate(),
-        scorer=hrbias_scorer(leak_check=leak_check),
+        scorer=hrbias_scorer(data_dir=str(FIXTURE_DATA_DIR), leak_check=leak_check),
         epochs=epochs,
         metadata=metadata,
     )

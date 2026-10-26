@@ -6,7 +6,14 @@ from inspect_ai.log import EvalLog, EvalSample
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.scorer import Score
 from inspect_ai.tool import ToolChoice, ToolInfo
-from support import MOCK_MODEL, VALID_CODES, VALID_SHEET_JSON, mock_output, run_scored_eval
+from support import (
+    FIXTURE_DATA_DIR,
+    MOCK_MODEL,
+    VALID_CODES,
+    VALID_SHEET_JSON,
+    mock_output,
+    run_scored_eval,
+)
 
 from hrbias.codebook import CODES
 from hrbias.dataset import hrbias_dataset, load_benchmark_data
@@ -62,7 +69,7 @@ def test_judge_failure_is_recorded_not_dropped(tmp_path: Path) -> None:
     log = run_scored_eval(tmp_path, judge)
 
     samples = _samples(log)
-    assert len(samples) == len(hrbias_dataset())
+    assert len(samples) == len(hrbias_dataset(FIXTURE_DATA_DIR))
     for sample in samples:
         score = _score(sample)
         assert score.value == {"judge_status": STATUS_FAILED, **dict.fromkeys(CODES)}
@@ -109,7 +116,7 @@ def _score(sample: EvalSample) -> Score:
 
 
 def _all_group_terms() -> set[str]:
-    data = load_benchmark_data()
+    data = load_benchmark_data(FIXTURE_DATA_DIR)
     return {
         term
         for groups in data.groups.values()

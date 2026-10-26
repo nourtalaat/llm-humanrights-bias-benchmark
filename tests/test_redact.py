@@ -1,4 +1,5 @@
 import pytest
+from support import FIXTURE_DATA_DIR
 
 from hrbias.dataset import load_benchmark_data
 from hrbias.redact import GROUP_TOKEN, Redaction, redact
@@ -188,7 +189,7 @@ def test_redact(
 
 
 def test_redact_removes_every_group_term_from_every_prompt() -> None:
-    data = load_benchmark_data()
+    data = load_benchmark_data(FIXTURE_DATA_DIR)
     for language, groups in data.groups.items():
         for group in groups:
             text = " ".join(group.group_terms())

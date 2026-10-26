@@ -11,9 +11,9 @@ is measured. Questions are written natively in English, Arabic and Hebrew.
 
 ## Status
 
-Skeleton with placeholder data. The groups and scenarios in `data/` are
-fictional examples that exist only to exercise the code. Results produced with
-them say nothing about any real group.
+Skeleton without data. The question bank goes in `data/`, which is empty for
+now. The tests use fictional placeholder data in `tests/fixtures/data/`, which
+exists only to exercise the code and says nothing about any real group.
 
 ## How it works
 

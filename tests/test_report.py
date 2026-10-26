@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolChoice, ToolInfo
-from support import VALID_CODES, Reply, mock_output, run_scored_eval
+from support import FIXTURE_DATA_DIR, VALID_CODES, Reply, mock_output, run_scored_eval
 
 from hrbias.report import REPORT_JSON, REPORT_MARKDOWN, main
 from hrbias.versions import run_metadata
@@ -51,7 +51,12 @@ def test_report_writes_markdown_and_json(
     out_dir = tmp_path / "report"
     run_scored_eval(log_dir, _alternating_judge(), languages=["en"], epochs=2, metadata=metadata)
 
-    assert main(["report", str(log_dir), "--out-dir", str(out_dir)]) == 0
+    assert (
+        main(
+            ["report", str(log_dir), "--out-dir", str(out_dir), "--data-dir", str(FIXTURE_DATA_DIR)]
+        )
+        == 0
+    )
 
     markdown = (out_dir / REPORT_MARKDOWN).read_text(encoding="utf-8")
     [report] = json.loads((out_dir / REPORT_JSON).read_text(encoding="utf-8"))
@@ -76,6 +81,8 @@ def test_report_consistency_check_records_judge_failures(tmp_path: Path) -> None
         [
             "report",
             str(log_dir),
+            "--data-dir",
+            str(FIXTURE_DATA_DIR),
             "--consistency-sample",
             "3",
             "--consistency-grader",

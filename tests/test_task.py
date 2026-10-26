@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from inspect_ai import eval
 from inspect_ai.model import get_model
-from support import MOCK_MODEL, VALID_SHEET_JSON, echo_model, mock_output
+from support import FIXTURE_DATA_DIR, MOCK_MODEL, VALID_SHEET_JSON, echo_model, mock_output
 
 from hrbias import BENCHMARK_VERSION
 from hrbias.dataset import hrbias_dataset
@@ -17,7 +17,7 @@ def test_end_to_end_eval_and_report(tmp_path: Path) -> None:
     grader = get_model(MOCK_MODEL, custom_outputs=lambda *_: mock_output(VALID_SHEET_JSON))
 
     [log] = eval(
-        hrbias(),
+        hrbias(data_dir=str(FIXTURE_DATA_DIR)),
         model=get_model(MOCK_MODEL, custom_outputs=echo_model),
         model_roles={"grader": grader},
         log_dir=str(log_dir),
@@ -29,9 +29,9 @@ def test_end_to_end_eval_and_report(tmp_path: Path) -> None:
     assert log.eval.metadata == run_metadata()
     assert log.eval.config.epochs == DEFAULT_EPOCHS
     assert log.samples is not None
-    assert len(log.samples) == len(hrbias_dataset()) * DEFAULT_EPOCHS
+    assert len(log.samples) == len(hrbias_dataset(FIXTURE_DATA_DIR)) * DEFAULT_EPOCHS
 
-    assert main(["report", str(log_dir)]) == 0
+    assert main(["report", str(log_dir), "--data-dir", str(FIXTURE_DATA_DIR)]) == 0
     markdown = (log_dir / REPORT_MARKDOWN).read_text(encoding="utf-8")
     assert (log_dir / REPORT_JSON).is_file()
     assert 'Mean set disparity in "stance = affirms": 0.000' in markdown
@@ -47,6 +47,6 @@ def test_end_to_end_eval_and_report(tmp_path: Path) -> None:
     ],
 )
 def test_task_language_parameter(languages: str | list[str] | None, expected: set[str]) -> None:
-    task = hrbias(languages=languages)
+    task = hrbias(languages=languages, data_dir=str(FIXTURE_DATA_DIR))
 
     assert {s.metadata["language"] for s in task.dataset if s.metadata} == expected

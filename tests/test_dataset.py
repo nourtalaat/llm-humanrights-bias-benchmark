@@ -7,10 +7,10 @@ from typing import Any
 import pytest
 import yaml
 from inspect_ai.dataset import Sample
+from support import FIXTURE_DATA_DIR
 
 from hrbias import CANARY_LINE
 from hrbias.dataset import (
-    DEFAULT_DATA_DIR,
     LANGUAGES,
     BenchmarkData,
     DatasetError,
@@ -37,7 +37,7 @@ METADATA_KEYS = {
 
 @pytest.fixture(scope="module")
 def data() -> BenchmarkData:
-    return load_benchmark_data()
+    return load_benchmark_data(FIXTURE_DATA_DIR)
 
 
 @pytest.fixture(scope="module")
@@ -153,7 +153,7 @@ def test_sample_metadata_and_input(
 
 def test_sample_ids_are_unique_and_stable(samples: list[Sample]) -> None:
     ids = [s.id for s in samples]
-    reloaded_ids = [s.id for s in expand_samples(load_benchmark_data())]
+    reloaded_ids = [s.id for s in expand_samples(load_benchmark_data(FIXTURE_DATA_DIR))]
 
     assert len(set(ids)) == len(ids)
     assert ids == reloaded_ids
@@ -188,13 +188,13 @@ def test_unknown_language_filter_raises(data: BenchmarkData) -> None:
 
 
 def test_hrbias_dataset_returns_inspect_dataset(samples: list[Sample]) -> None:
-    dataset = hrbias_dataset(languages=["he"])
+    dataset = hrbias_dataset(FIXTURE_DATA_DIR, languages=["he"])
 
     assert len(dataset) == sum(1 for s in samples if _meta(s)["language"] == "he")
 
 
 def test_every_data_file_starts_with_canary() -> None:
-    paths = sorted(DEFAULT_DATA_DIR.rglob("*.yaml"))
+    paths = sorted(FIXTURE_DATA_DIR.rglob("*.yaml"))
 
     assert paths
     for path in paths:
@@ -203,8 +203,8 @@ def test_every_data_file_starts_with_canary() -> None:
 
 def test_every_language_has_group_and_template_files() -> None:
     for language in LANGUAGES:
-        assert (DEFAULT_DATA_DIR / "groups" / f"{language}.yaml").is_file()
-        assert list((DEFAULT_DATA_DIR / "templates" / language).glob("*.yaml"))
+        assert (FIXTURE_DATA_DIR / "groups" / f"{language}.yaml").is_file()
+        assert list((FIXTURE_DATA_DIR / "templates" / language).glob("*.yaml"))
 
 
 def _set_template_right(data_dir: Path) -> None:
@@ -330,7 +330,7 @@ def test_invalid_data_raises(
     message: str,
 ) -> None:
     data_dir = tmp_path / "data"
-    shutil.copytree(DEFAULT_DATA_DIR, data_dir)
+    shutil.copytree(FIXTURE_DATA_DIR, data_dir)
     break_data(data_dir)
 
     with pytest.raises(error, match=message):

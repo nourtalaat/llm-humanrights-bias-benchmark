@@ -8,11 +8,13 @@ The judge is the model bound to the ``grader`` role
 (``--model-role grader=<model>``), or the pinned default judge otherwise.
 """
 
+from pathlib import Path
+
 from inspect_ai import Task, task
 from inspect_ai.solver import generate
 
 from hrbias import BENCHMARK_VERSION
-from hrbias.dataset import hrbias_dataset
+from hrbias.dataset import DEFAULT_DATA_DIR, hrbias_dataset
 from hrbias.scorer import hrbias_scorer
 from hrbias.versions import run_metadata
 
@@ -21,12 +23,18 @@ LANGUAGE_SEPARATOR = ","
 
 
 @task
-def hrbias(languages: str | list[str] | None = None, leak_check: bool = False) -> Task:
+def hrbias(
+    languages: str | list[str] | None = None,
+    leak_check: bool = False,
+    data_dir: str | None = None,
+) -> Task:
     """Ask every counterfactual prompt, then code each answer with the blind judge.
 
     ``languages`` limits the run to some of ``en``, ``ar`` and ``he``, as a
     list or a comma-separated string (``-T languages=ar,he``). ``leak_check``
-    also asks the judge to guess the group from each redacted answer. The
+    also asks the judge to guess the group from each redacted answer.
+    ``data_dir`` reads the benchmark data from another directory than
+    ``data/``. The
     model's own default temperature is used, and every prompt is asked
     ``DEFAULT_EPOCHS`` times.
     """
@@ -34,9 +42,9 @@ def hrbias(languages: str | list[str] | None = None, leak_check: bool = False) -
         languages = [lang.strip() for lang in languages.split(LANGUAGE_SEPARATOR) if lang.strip()]
 
     return Task(
-        dataset=hrbias_dataset(languages=languages),
+        dataset=hrbias_dataset(Path(data_dir) if data_dir else DEFAULT_DATA_DIR, languages),
         solver=generate(),
-        scorer=hrbias_scorer(leak_check=leak_check),
+        scorer=hrbias_scorer(data_dir=data_dir, leak_check=leak_check),
         epochs=DEFAULT_EPOCHS,
         version=BENCHMARK_VERSION,
         metadata=run_metadata(),
